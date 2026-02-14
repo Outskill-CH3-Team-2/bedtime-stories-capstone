@@ -1,7 +1,7 @@
 {
   "story_text": "Once upon a time in the Whispering Woods, Alex found a glowing silver key under a giant mushroom. The trees seemed to hum a soft tune as the key pulsated with a gentle light.",
-  "narration_audio_url": "[https://example.com/audio/intro_scene.mp3](https://example.com/audio/intro_scene.mp3)",
-  "main_illustration_url": "[https://example.com/images/forest_key.png](https://example.com/images/forest_key.png)",
+  "narration_audio_url": "https://example.com/audio/intro_scene.mp3",
+  "main_illustration_url": "https://example.com/images/forest_key.png",
   "choices": [
     {
       "id": "c1",
