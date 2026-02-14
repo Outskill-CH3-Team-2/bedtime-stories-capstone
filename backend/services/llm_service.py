@@ -15,7 +15,7 @@ def call_openrouter(messages: list):
         return {"error": "API Key not found in .env"}
 
     response = requests.post(
-        url="[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)",
+        url="https://openrouter.ai/api/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
             "HTTP-Referer": "http://localhost:8000", 
