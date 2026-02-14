@@ -1,0 +1,25 @@
+# --- Environment & Secrets ---
+.env
+.env.local
+.env.*
+# Do not ignore .env.example if you create one for team members
+
+# --- IDEs & Editors ---
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# --- Project Specific (Story Weaver) ---
+# Ignore generated test audio or temporary assets
+test-audio/
+*.mp3
+*.png
+*.jpg
+# Note: Keep mock_responses/ as it contains your project data
+
+# --- Tooling ---
+node_modules/
+dist/
+build/
