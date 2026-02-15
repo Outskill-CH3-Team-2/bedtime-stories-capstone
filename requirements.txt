@@ -1,5 +1,18 @@
+# Web Framework & Server
 fastapi
-uvicorn
-requests
-python-dotenv
+uvicorn[standard]
 pydantic
+python-dotenv
+requests
+
+# AI Orchestration & Observability
+langgraph
+langsmith
+openai
+
+# Media & Utilities
+Pillow
+PyYAML
+
+# Testing
+pytest
