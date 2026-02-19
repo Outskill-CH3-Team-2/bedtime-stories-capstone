@@ -1,0 +1,100 @@
+"""
+session_store.py — In-memory session store for StoryState objects.
+
+Sessions expire after SESSION_TTL_SECONDS (default 1 hour).
+A background asyncio task runs every 5 minutes to prune stale sessions.
+
+Usage:
+    from backend.session_store import session_store
+    session_store.set(state.session_id, state)
+    state = session_store.get(session_id)
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from typing import Optional
+
+from backend.contracts import StoryState
+
+SESSION_TTL_SECONDS = 3600  # 1 hour
+CLEANUP_INTERVAL_SECONDS = 300  # 5 minutes
+
+
+class SessionStore:
+    def __init__(self) -> None:
+        self._store: dict[str, tuple[StoryState, float]] = {}
+        # timestamp → (state, created_at)
+        self._cleanup_task: Optional[asyncio.Task] = None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def get(self, session_id: str) -> Optional[StoryState]:
+        """Return the StoryState for session_id, or None if not found / expired."""
+        entry = self._store.get(session_id)
+        if entry is None:
+            return None
+        state, created_at = entry
+        if time.monotonic() - created_at > SESSION_TTL_SECONDS:
+            del self._store[session_id]
+            return None
+        return state
+
+    def set(self, session_id: str, state: StoryState) -> None:
+        """Store or overwrite a StoryState, refreshing its creation timestamp."""
+        self._store[session_id] = (state, time.monotonic())
+
+    def delete(self, session_id: str) -> None:
+        """Remove a session if it exists."""
+        self._store.pop(session_id, None)
+
+    def count(self) -> int:
+        """Return the number of active (non-expired) sessions."""
+        now = time.monotonic()
+        return sum(
+            1
+            for _, (_, created_at) in self._store.items()
+            if now - created_at <= SESSION_TTL_SECONDS
+        )
+
+    # ------------------------------------------------------------------
+    # Background cleanup
+    # ------------------------------------------------------------------
+
+    async def _cleanup_loop(self) -> None:
+        """Periodically remove sessions older than SESSION_TTL_SECONDS."""
+        while True:
+            await asyncio.sleep(CLEANUP_INTERVAL_SECONDS)
+            self._prune()
+
+    def _prune(self) -> None:
+        now = time.monotonic()
+        expired = [
+            sid
+            for sid, (_, created_at) in self._store.items()
+            if now - created_at > SESSION_TTL_SECONDS
+        ]
+        for sid in expired:
+            del self._store[sid]
+        if expired:
+            print(f"[session_store] Pruned {len(expired)} expired session(s).")
+
+    def start_cleanup_task(self) -> None:
+        """
+        Start the background cleanup loop.
+        Call this from the FastAPI lifespan startup event.
+        """
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+
+    def stop_cleanup_task(self) -> None:
+        """Cancel the background cleanup loop on shutdown."""
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+
+
+# Singleton — import and use this everywhere
+session_store = SessionStore()

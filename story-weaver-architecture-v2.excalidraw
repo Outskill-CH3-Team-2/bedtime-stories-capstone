@@ -1,0 +1,1352 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "story-weaver-architecture-v2",
+  "elements": [
+    {
+      "type": "text",
+      "x": 50,
+      "y": -15,
+      "width": 400,
+      "height": 30,
+      "text": "Story Weaver \u2014 Architecture",
+      "fontSize": 20,
+      "fontFamily": 1,
+      "strokeColor": "#1e1e1e",
+      "id": "title",
+      "seed": 29
+    },
+    {
+      "type": "text",
+      "x": 620,
+      "y": -15,
+      "width": 330,
+      "height": 25,
+      "text": "Om + M.Feed",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#868e96",
+      "id": "owner-fe",
+      "seed": 30
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 20,
+      "width": 900,
+      "height": 80,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#a5d8ff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "roundness": {
+        "type": 3
+      },
+      "id": "frontend-box",
+      "seed": 1
+    },
+    {
+      "type": "text",
+      "x": 310,
+      "y": 35,
+      "width": 400,
+      "height": 50,
+      "text": "FRONTEND (HTML + CSS + JS)\nConfig Form \u2192 Story Display \u2192 Choices \u2192 End",
+      "fontSize": 16,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "id": "frontend-text",
+      "seed": 2
+    },
+    {
+      "type": "arrow",
+      "x": 500,
+      "y": 100,
+      "width": 0,
+      "height": 50,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          50
+        ]
+      ],
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "id": "arrow-fe-api",
+      "seed": 3
+    },
+    {
+      "type": "text",
+      "x": 510,
+      "y": 110,
+      "width": 200,
+      "height": 25,
+      "text": "REST API (JSON)",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "id": "arrow-label-1",
+      "seed": 4
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 150,
+      "width": 900,
+      "height": 100,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#b2f2bb",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "roundness": {
+        "type": 3
+      },
+      "id": "api-box",
+      "seed": 5
+    },
+    {
+      "type": "text",
+      "x": 80,
+      "y": 160,
+      "width": 850,
+      "height": 80,
+      "text": "API LAYER (FastAPI) \u2014 Harshal\nPOST /story/start    POST /story/choose    GET /story/status    GET /story/result\nSession Store (in-memory dict with TTL) \u2014 Fire & Poll Pattern",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "id": "api-text",
+      "seed": 6
+    },
+    {
+      "type": "arrow",
+      "x": 500,
+      "y": 250,
+      "width": 0,
+      "height": 40,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          40
+        ]
+      ],
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "id": "arrow-api-orch",
+      "seed": 7
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 290,
+      "width": 900,
+      "height": 60,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#ffec99",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "roundness": {
+        "type": 3
+      },
+      "id": "orchestrator-box",
+      "seed": 8
+    },
+    {
+      "type": "text",
+      "x": 120,
+      "y": 300,
+      "width": 800,
+      "height": 40,
+      "text": "ORCHESTRATOR \u2014 process_scene()  @traceable  \u00b7  LangGraph StateGraph\ntext \u2192 safety \u2192 parallel media \u2192 assemble SceneOutput",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "id": "orch-text",
+      "seed": 9
+    },
+    {
+      "type": "arrow",
+      "x": 200,
+      "y": 350,
+      "width": 0,
+      "height": 40,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          40
+        ]
+      ],
+      "strokeColor": "#e03131",
+      "strokeWidth": 2,
+      "id": "arrow-step1",
+      "seed": 10
+    },
+    {
+      "type": "text",
+      "x": 210,
+      "y": 358,
+      "width": 80,
+      "height": 20,
+      "text": "Step 1",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "strokeColor": "#e03131",
+      "id": "step1-label",
+      "seed": 101
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 390,
+      "width": 280,
+      "height": 160,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#d0bfff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "roundness": {
+        "type": 3
+      },
+      "id": "text-pipeline-box",
+      "seed": 11
+    },
+    {
+      "type": "text",
+      "x": 70,
+      "y": 400,
+      "width": 250,
+      "height": 140,
+      "text": "TEXT PIPELINE \u2014 Kumaraguru\n\nbuild_prompt()\n  \u2193\ngenerate_text()  [LLM call]\n  \u2193\nparse_response()\n\u2192 (narrative, [choices])",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "id": "text-pipeline-text",
+      "seed": 12
+    },
+    {
+      "type": "arrow",
+      "x": 330,
+      "y": 470,
+      "width": 30,
+      "height": 0,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          30,
+          0
+        ]
+      ],
+      "strokeColor": "#e03131",
+      "strokeWidth": 2,
+      "id": "arrow-text-safety",
+      "seed": 13
+    },
+    {
+      "type": "text",
+      "x": 335,
+      "y": 450,
+      "width": 80,
+      "height": 20,
+      "text": "Step 2",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "strokeColor": "#e03131",
+      "id": "step2-label",
+      "seed": 102
+    },
+    {
+      "type": "rectangle",
+      "x": 360,
+      "y": 390,
+      "width": 230,
+      "height": 160,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#ffc9c9",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "roundness": {
+        "type": 3
+      },
+      "id": "safety-box",
+      "seed": 14
+    },
+    {
+      "type": "text",
+      "x": 375,
+      "y": 400,
+      "width": 210,
+      "height": 140,
+      "text": "SAFETY \u2014 SaiKrishna\n\ncheck_content_safety()\n  \u2192 gpt-4o-mini classifier\n  \u2192 VIOLENCE, FEAR,\n    SADNESS, INAPPROPRIATE\n  \u2192 pass/fail + retry",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "id": "safety-text",
+      "seed": 15
+    },
+    {
+      "type": "arrow",
+      "x": 590,
+      "y": 470,
+      "width": 30,
+      "height": 0,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          30,
+          0
+        ]
+      ],
+      "strokeColor": "#e03131",
+      "strokeWidth": 2,
+      "id": "arrow-safety-media",
+      "seed": 16
+    },
+    {
+      "type": "text",
+      "x": 592,
+      "y": 450,
+      "width": 80,
+      "height": 20,
+      "text": "Step 3",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "strokeColor": "#e03131",
+      "id": "step3-label",
+      "seed": 103
+    },
+    {
+      "type": "rectangle",
+      "x": 620,
+      "y": 390,
+      "width": 330,
+      "height": 160,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#c0eb75",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "roundness": {
+        "type": 3
+      },
+      "id": "media-pipeline-box",
+      "seed": 17
+    },
+    {
+      "type": "text",
+      "x": 635,
+      "y": 400,
+      "width": 300,
+      "height": 140,
+      "text": "MEDIA PIPELINE \u2014 Tamas\n\nasyncio.gather( \u2190 ALL PARALLEL\n  generate_audio(narrative)\n  generate_image(narrative, ref_photo)\n  generate_audio(choice_1)\n  generate_image(choice_1, ref_photo)\n  generate_audio(choice_2)\n  generate_image(choice_2, ref_photo)\n)",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "id": "media-pipeline-text",
+      "seed": 18
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 580,
+      "width": 200,
+      "height": 80,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#eebefa",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "roundness": {
+        "type": 3
+      },
+      "id": "rag-box",
+      "seed": 19
+    },
+    {
+      "type": "text",
+      "x": 65,
+      "y": 590,
+      "width": 180,
+      "height": 60,
+      "text": "RAG (Stretch) \u2014 Ravi\n\nretrieve() \u2192 fairy tale context",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "id": "rag-text",
+      "seed": 20
+    },
+    {
+      "type": "arrow",
+      "x": 150,
+      "y": 580,
+      "width": 40,
+      "height": -30,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          40,
+          -30
+        ]
+      ],
+      "strokeColor": "#868e96",
+      "strokeWidth": 1,
+      "strokeStyle": "dashed",
+      "id": "arrow-rag-text",
+      "seed": 21
+    },
+    {
+      "type": "rectangle",
+      "x": 620,
+      "y": 580,
+      "width": 330,
+      "height": 80,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#ffd8a8",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "roundness": {
+        "type": 3
+      },
+      "id": "providers-box",
+      "seed": 22
+    },
+    {
+      "type": "text",
+      "x": 640,
+      "y": 585,
+      "width": 300,
+      "height": 70,
+      "text": "EXTERNAL PROVIDERS (via OpenRouter)\nText: openai/gpt-4o\nTTS: openai/tts-1    Image: gemini-2.5-flash\nSingle OPENROUTER_API_KEY",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "id": "providers-text",
+      "seed": 23
+    },
+    {
+      "type": "arrow",
+      "x": 785,
+      "y": 550,
+      "width": 0,
+      "height": 30,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          30
+        ]
+      ],
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "id": "arrow-media-providers",
+      "seed": 24
+    },
+    {
+      "type": "rectangle",
+      "x": 280,
+      "y": 580,
+      "width": 310,
+      "height": 80,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#c5f6fa",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "roundness": {
+        "type": 3
+      },
+      "id": "langsmith-box",
+      "seed": 25
+    },
+    {
+      "type": "text",
+      "x": 300,
+      "y": 590,
+      "width": 270,
+      "height": 60,
+      "text": "LANGSMITH OBSERVABILITY\nLangGraph auto-traces every node\nTraces: latency, tokens, cost, safety flags\nDashboard: smith.langchain.com",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "id": "langsmith-text",
+      "seed": 26
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 690,
+      "width": 900,
+      "height": 60,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#e9ecef",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 1,
+      "roundness": {
+        "type": 3
+      },
+      "id": "pregeneration-box",
+      "seed": 27
+    },
+    {
+      "type": "text",
+      "x": 120,
+      "y": 700,
+      "width": 800,
+      "height": 40,
+      "text": "PRE-GENERATION: While child listens to Scene N, background-generate Scene N+1 for each choice\nResult: first scene ~14s, every subsequent scene = INSTANT",
+      "fontSize": 13,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "id": "pregen-text",
+      "seed": 28
+    },
+    {
+      "type": "text",
+      "x": 50,
+      "y": 770,
+      "width": 900,
+      "height": 80,
+      "text": "LATENCY BUDGET:  Text(3s) + Safety(1s) + max(Media)(~10s) = ~14s first scene\nCOST PER SCENE:  ~$0.04-0.10  |  FULL STORY (8 scenes): ~$0.50-2.00\nINFRA: Alessandro  |  Docker + Render/Railway  |  OpenRouter spending cap $20/day dev",
+      "fontSize": 13,
+      "fontFamily": 1,
+      "strokeColor": "#868e96",
+      "id": "footer-stats",
+      "seed": 31
+    },
+    {
+      "type": "line",
+      "x": 50,
+      "y": 880,
+      "width": 900,
+      "height": 0,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          900,
+          0
+        ]
+      ],
+      "strokeColor": "#ced4da",
+      "strokeWidth": 2,
+      "strokeStyle": "dashed",
+      "id": "divider-line",
+      "seed": 200
+    },
+    {
+      "type": "text",
+      "x": 50,
+      "y": 890,
+      "width": 700,
+      "height": 35,
+      "text": "LangGraph Pipeline \u2014 backend/orchestrator/pipeline.py",
+      "fontSize": 22,
+      "fontFamily": 1,
+      "strokeColor": "#1971c2",
+      "id": "lg-title",
+      "seed": 201
+    },
+    {
+      "type": "text",
+      "x": 50,
+      "y": 928,
+      "width": 900,
+      "height": 22,
+      "text": "StateGraph compiled at import time \u00b7 ainvoke() runs asynchronously \u00b7 PipelineState TypedDict merges partial dicts from each node",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "strokeColor": "#868e96",
+      "id": "lg-subtitle",
+      "seed": 202
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 960,
+      "width": 270,
+      "height": 430,
+      "strokeColor": "#495057",
+      "backgroundColor": "#f8f9fa",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      },
+      "id": "state-box",
+      "seed": 203
+    },
+    {
+      "type": "text",
+      "x": 65,
+      "y": 968,
+      "width": 240,
+      "height": 25,
+      "text": "PipelineState (TypedDict)",
+      "fontSize": 14,
+      "fontFamily": 1,
+      "strokeColor": "#1971c2",
+      "id": "state-title",
+      "seed": 204
+    },
+    {
+      "type": "line",
+      "x": 55,
+      "y": 994,
+      "width": 260,
+      "height": 0,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          260,
+          0
+        ]
+      ],
+      "strokeColor": "#ced4da",
+      "strokeWidth": 1,
+      "id": "state-divider",
+      "seed": 205
+    },
+    {
+      "type": "text",
+      "x": 65,
+      "y": 1000,
+      "width": 245,
+      "height": 380,
+      "text": "INPUT (set once)\n  story_state: StoryState\n  t_start: float\n\nFROM generate_text / retry_text\n  raw_text: str\n  narrative: str\n  choices_raw: list[str]\n\nFROM safety_check\n  safety: SafetyResult\n  safety_retry_count: int\n\nFROM generate_media\n  narration_audio_bytes: bytes\n  main_image_bytes: bytes\n  choice_audio_bytes: list[bytes]\n  choice_image_bytes: list[bytes]\n\nFROM assemble\n  scene_output: SceneOutput\n\n\u2500\u2500 Merge semantics \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nEach node returns only the\nkeys it mutates. LangGraph\nshallow-merges into full state.",
+      "fontSize": 11,
+      "fontFamily": 3,
+      "strokeColor": "#343a40",
+      "id": "state-fields",
+      "seed": 206
+    },
+    {
+      "type": "ellipse",
+      "x": 400,
+      "y": 970,
+      "width": 90,
+      "height": 50,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#343a40",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "id": "node-start",
+      "seed": 210
+    },
+    {
+      "type": "text",
+      "x": 412,
+      "y": 984,
+      "width": 66,
+      "height": 22,
+      "text": "START",
+      "fontSize": 13,
+      "fontFamily": 1,
+      "strokeColor": "#ffffff",
+      "textAlign": "center",
+      "id": "node-start-text",
+      "seed": 211
+    },
+    {
+      "type": "arrow",
+      "x": 445,
+      "y": 1020,
+      "width": 0,
+      "height": 45,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          45
+        ]
+      ],
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "id": "arr-start-gentext",
+      "seed": 212
+    },
+    {
+      "type": "rectangle",
+      "x": 340,
+      "y": 1065,
+      "width": 210,
+      "height": 90,
+      "strokeColor": "#6741d9",
+      "backgroundColor": "#d0bfff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      },
+      "id": "node-gentext",
+      "seed": 213
+    },
+    {
+      "type": "text",
+      "x": 355,
+      "y": 1073,
+      "width": 185,
+      "height": 75,
+      "text": "node_generate_text\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nbuild_prompt()\ngenerate_text()   \u2192 LLM\nparse_response()",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "id": "node-gentext-text",
+      "seed": 214
+    },
+    {
+      "type": "arrow",
+      "x": 445,
+      "y": 1155,
+      "width": 0,
+      "height": 45,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          45
+        ]
+      ],
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "id": "arr-gentext-safety",
+      "seed": 215
+    },
+    {
+      "type": "text",
+      "x": 455,
+      "y": 1168,
+      "width": 160,
+      "height": 18,
+      "text": "narrative + choices_raw",
+      "fontSize": 10,
+      "fontFamily": 1,
+      "strokeColor": "#868e96",
+      "id": "arr-gentext-safety-label",
+      "seed": 2150
+    },
+    {
+      "type": "rectangle",
+      "x": 340,
+      "y": 1200,
+      "width": 210,
+      "height": 90,
+      "strokeColor": "#c92a2a",
+      "backgroundColor": "#ffc9c9",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      },
+      "id": "node-safety",
+      "seed": 216
+    },
+    {
+      "type": "text",
+      "x": 355,
+      "y": 1208,
+      "width": 185,
+      "height": 75,
+      "text": "node_safety_check\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\ncheck_content_safety()\n  \u2192 gpt-4o-mini LLM\n  \u2192 SafetyResult",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "id": "node-safety-text",
+      "seed": 217
+    },
+    {
+      "type": "diamond",
+      "x": 400,
+      "y": 1310,
+      "width": 90,
+      "height": 70,
+      "strokeColor": "#e67700",
+      "backgroundColor": "#fff3bf",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "id": "diamond-router",
+      "seed": 218
+    },
+    {
+      "type": "text",
+      "x": 408,
+      "y": 1330,
+      "width": 74,
+      "height": 30,
+      "text": "route_\nsafety()",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "strokeColor": "#e67700",
+      "id": "diamond-text",
+      "seed": 219
+    },
+    {
+      "type": "arrow",
+      "x": 445,
+      "y": 1290,
+      "width": 0,
+      "height": 22,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          22
+        ]
+      ],
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "id": "arr-safety-diamond",
+      "seed": 220
+    },
+    {
+      "type": "arrow",
+      "x": 490,
+      "y": 1345,
+      "width": 200,
+      "height": 85,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          200,
+          0
+        ],
+        [
+          200,
+          85
+        ]
+      ],
+      "strokeColor": "#2f9e44",
+      "strokeWidth": 2,
+      "id": "arr-diamond-media",
+      "seed": 221
+    },
+    {
+      "type": "text",
+      "x": 500,
+      "y": 1325,
+      "width": 130,
+      "height": 18,
+      "text": "\u2713 passed",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "strokeColor": "#2f9e44",
+      "id": "label-passed",
+      "seed": 2210
+    },
+    {
+      "type": "rectangle",
+      "x": 590,
+      "y": 1430,
+      "width": 230,
+      "height": 130,
+      "strokeColor": "#2f9e44",
+      "backgroundColor": "#c0eb75",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      },
+      "id": "node-media",
+      "seed": 222
+    },
+    {
+      "type": "text",
+      "x": 603,
+      "y": 1438,
+      "width": 210,
+      "height": 115,
+      "text": "node_generate_media\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nasyncio.gather(\n  generate_audio(narrative)\n  generate_image(narrative)\n  generate_audio(choice\u00d7N)\n  generate_image(choice\u00d7N)\n)",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "id": "node-media-text",
+      "seed": 223
+    },
+    {
+      "type": "arrow",
+      "x": 705,
+      "y": 1560,
+      "width": 0,
+      "height": 45,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          45
+        ]
+      ],
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "id": "arr-media-assemble",
+      "seed": 224
+    },
+    {
+      "type": "rectangle",
+      "x": 590,
+      "y": 1605,
+      "width": 230,
+      "height": 100,
+      "strokeColor": "#1971c2",
+      "backgroundColor": "#a5d8ff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      },
+      "id": "node-assemble",
+      "seed": 225
+    },
+    {
+      "type": "text",
+      "x": 603,
+      "y": 1613,
+      "width": 210,
+      "height": 85,
+      "text": "node_assemble\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nencode_b64() all media\nbuild SceneOutput\nappend to state.messages\nss.status = COMPLETE",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "id": "node-assemble-text",
+      "seed": 226
+    },
+    {
+      "type": "arrow",
+      "x": 705,
+      "y": 1705,
+      "width": 0,
+      "height": 45,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          0,
+          45
+        ]
+      ],
+      "strokeColor": "#1e1e1e",
+      "strokeWidth": 2,
+      "id": "arr-assemble-end",
+      "seed": 227
+    },
+    {
+      "type": "ellipse",
+      "x": 660,
+      "y": 1750,
+      "width": 90,
+      "height": 50,
+      "strokeColor": "#1e1e1e",
+      "backgroundColor": "#343a40",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "id": "node-end",
+      "seed": 228
+    },
+    {
+      "type": "text",
+      "x": 677,
+      "y": 1764,
+      "width": 56,
+      "height": 22,
+      "text": "END",
+      "fontSize": 13,
+      "fontFamily": 1,
+      "strokeColor": "#ffffff",
+      "textAlign": "center",
+      "id": "node-end-text",
+      "seed": 229
+    },
+    {
+      "type": "arrow",
+      "x": 400,
+      "y": 1345,
+      "width": -180,
+      "height": 115,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          -180,
+          0
+        ],
+        [
+          -180,
+          115
+        ]
+      ],
+      "strokeColor": "#c92a2a",
+      "strokeWidth": 2,
+      "id": "arr-diamond-retry",
+      "seed": 230
+    },
+    {
+      "type": "text",
+      "x": 255,
+      "y": 1325,
+      "width": 130,
+      "height": 18,
+      "text": "\u2717 failed (retry left)",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "strokeColor": "#c92a2a",
+      "id": "label-failed",
+      "seed": 2300
+    },
+    {
+      "type": "rectangle",
+      "x": 100,
+      "y": 1460,
+      "width": 210,
+      "height": 110,
+      "strokeColor": "#c92a2a",
+      "backgroundColor": "#fff0f0",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      },
+      "id": "node-retry",
+      "seed": 231
+    },
+    {
+      "type": "text",
+      "x": 113,
+      "y": 1468,
+      "width": 188,
+      "height": 95,
+      "text": "node_retry_text\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nbuild_prompt()\n+ safety nudge message\ngenerate_text()   \u2192 LLM\nparse_response()\nretry_count += 1",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "textAlign": "center",
+      "id": "node-retry-text",
+      "seed": 232
+    },
+    {
+      "type": "arrow",
+      "x": 205,
+      "y": 1460,
+      "width": 135,
+      "height": -265,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          135,
+          0
+        ],
+        [
+          135,
+          -265
+        ]
+      ],
+      "strokeColor": "#c92a2a",
+      "strokeWidth": 2,
+      "strokeStyle": "dashed",
+      "id": "arr-retry-safety",
+      "seed": 233
+    },
+    {
+      "type": "text",
+      "x": 300,
+      "y": 1340,
+      "width": 130,
+      "height": 18,
+      "text": "\u2192 re-check safety",
+      "fontSize": 10,
+      "fontFamily": 1,
+      "strokeColor": "#c92a2a",
+      "id": "label-recheck",
+      "seed": 2330
+    },
+    {
+      "type": "text",
+      "x": 400,
+      "y": 1390,
+      "width": 220,
+      "height": 36,
+      "text": "retries \u2265 MAX (1)\n\u2192 fail-open, proceed to media",
+      "fontSize": 10,
+      "fontFamily": 1,
+      "strokeColor": "#e67700",
+      "textAlign": "center",
+      "id": "label-failopen",
+      "seed": 234
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 1430,
+      "width": 40,
+      "height": 30,
+      "strokeColor": "#e67700",
+      "backgroundColor": "#fff3bf",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      },
+      "id": "badge-max",
+      "seed": 235
+    },
+    {
+      "type": "text",
+      "x": 55,
+      "y": 1437,
+      "width": 30,
+      "height": 18,
+      "text": "\u00d71",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "strokeColor": "#e67700",
+      "textAlign": "center",
+      "id": "badge-max-text",
+      "seed": 236
+    },
+    {
+      "type": "text",
+      "x": 94,
+      "y": 1437,
+      "width": 120,
+      "height": 18,
+      "text": "MAX_SAFETY_RETRIES",
+      "fontSize": 9,
+      "fontFamily": 1,
+      "strokeColor": "#868e96",
+      "id": "badge-max-label",
+      "seed": 237
+    },
+    {
+      "type": "rectangle",
+      "x": 850,
+      "y": 960,
+      "width": 200,
+      "height": 250,
+      "strokeColor": "#495057",
+      "backgroundColor": "#f8f9fa",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      },
+      "id": "status-box",
+      "seed": 240
+    },
+    {
+      "type": "text",
+      "x": 862,
+      "y": 968,
+      "width": 176,
+      "height": 22,
+      "text": "StoryStatus transitions",
+      "fontSize": 13,
+      "fontFamily": 1,
+      "strokeColor": "#1971c2",
+      "id": "status-title",
+      "seed": 241
+    },
+    {
+      "type": "line",
+      "x": 855,
+      "y": 992,
+      "width": 190,
+      "height": 0,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          190,
+          0
+        ]
+      ],
+      "strokeColor": "#ced4da",
+      "strokeWidth": 1,
+      "id": "status-divider",
+      "seed": 242
+    },
+    {
+      "type": "text",
+      "x": 862,
+      "y": 998,
+      "width": 176,
+      "height": 200,
+      "text": "PENDING\n  \u2193\nGENERATING_TEXT\n  (generate_text node)\n  \u2193\nSAFETY_CHECK\n  (safety_check node)\n  \u2193  [retry \u2192 back to\n  \u2193   GENERATING_TEXT]\n  \u2193\nGENERATING_MEDIA\n  (generate_media node)\n  \u2193\nCOMPLETE\n  (assemble node)\n\nFAILED (on exception)",
+      "fontSize": 11,
+      "fontFamily": 3,
+      "strokeColor": "#343a40",
+      "id": "status-fields",
+      "seed": 243
+    },
+    {
+      "type": "rectangle",
+      "x": 850,
+      "y": 1230,
+      "width": 200,
+      "height": 210,
+      "strokeColor": "#2f9e44",
+      "backgroundColor": "#ebfbee",
+      "fillStyle": "solid",
+      "strokeWidth": 1,
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      },
+      "id": "parallel-box",
+      "seed": 250
+    },
+    {
+      "type": "text",
+      "x": 862,
+      "y": 1238,
+      "width": 176,
+      "height": 22,
+      "text": "asyncio.gather() detail",
+      "fontSize": 13,
+      "fontFamily": 1,
+      "strokeColor": "#2f9e44",
+      "id": "parallel-title",
+      "seed": 251
+    },
+    {
+      "type": "line",
+      "x": 855,
+      "y": 1262,
+      "width": 190,
+      "height": 0,
+      "points": [
+        [
+          0,
+          0
+        ],
+        [
+          190,
+          0
+        ]
+      ],
+      "strokeColor": "#a9e34b",
+      "strokeWidth": 1,
+      "id": "parallel-divider",
+      "seed": 252
+    },
+    {
+      "type": "text",
+      "x": 862,
+      "y": 1268,
+      "width": 176,
+      "height": 165,
+      "text": "All tasks launched\nbefore any awaited:\n\ncreate_task(audio_narr)\ncreate_task(image_main)\ncreate_task(audio_c1)\ncreate_task(image_c1)\ncreate_task(audio_c2)\ncreate_task(image_c2)\n\nawait gather(*all)\n\n~10s \u2192 single await\nvs ~60s sequential",
+      "fontSize": 11,
+      "fontFamily": 3,
+      "strokeColor": "#343a40",
+      "id": "parallel-detail",
+      "seed": 253
+    },
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 1820,
+      "width": 900,
+      "height": 120,
+      "strokeColor": "#1971c2",
+      "backgroundColor": "#e7f5ff",
+      "fillStyle": "solid",
+      "strokeWidth": 2,
+      "roughness": 0,
+      "roundness": {
+        "type": 3
+      },
+      "id": "legend-box",
+      "seed": 260
+    },
+    {
+      "type": "text",
+      "x": 70,
+      "y": 1830,
+      "width": 860,
+      "height": 100,
+      "text": "LangGraph Concepts Used\n  StateGraph        \u2014 typed DAG; nodes return partial dicts merged into PipelineState automatically\n  Conditional Edge  \u2014 route_safety() inspects safety.passed + retry_count \u2192 picks next node at runtime\n  ainvoke()         \u2014 async execution, compatible with FastAPI BackgroundTasks\n  Auto-tracing      \u2014 LangSmith traces every node (input/output/timing) when LANGCHAIN_TRACING_V2=true \u2014 no @traceable needed on nodes",
+      "fontSize": 12,
+      "fontFamily": 1,
+      "strokeColor": "#1971c2",
+      "id": "legend-text",
+      "seed": 261
+    },
+    {
+      "type": "text",
+      "x": 50,
+      "y": 1958,
+      "width": 900,
+      "height": 22,
+      "text": "Generated: Story Weaver v2  \u00b7  LangGraph 0.3+  \u00b7  Python 3.12  \u00b7  FastAPI  \u00b7  OpenRouter",
+      "fontSize": 11,
+      "fontFamily": 1,
+      "strokeColor": "#ced4da",
+      "id": "footer-v2",
+      "seed": 262
+    }
+  ],
+  "appState": {
+    "viewBackgroundColor": "#ffffff",
+    "gridSize": 20
+  },
+  "files": {}
+}

@@ -1,8 +1,39 @@
+# --- Python Artifacts ---
+**/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtual Environments ---
+.venv/
+venv/
+ENV/
+env/
+# Standard environments
+
 # --- Environment & Secrets ---
 .env
 .env.local
 .env.*
-# Do not ignore .env.example if you create one for team members
+# Always keep secrets out of version control
 
 # --- IDEs & Editors ---
 .vscode/
@@ -10,16 +41,22 @@
 *.swp
 *.swo
 .DS_Store
+Thumbs.db
+# Ignore VSCode/PyCharm project settings
 
 # --- Project Specific (Story Weaver) ---
-# Ignore generated test audio or temporary assets
-test-audio/
+# Ignore generated test media
+test-output/
 *.mp3
 *.png
 *.jpg
-# Note: Keep mock_responses/ as it contains your project data
+!mock_responses/*.json  # Keep mock data
+!characters.yaml        # Keep character registry
 
-# --- Tooling ---
-node_modules/
-dist/
-build/
+# --- Logs & Caches ---
+pip-log.txt
+pip-delete-this-directory.txt
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
