@@ -16,3 +16,4 @@ PyYAML
 
 # Testing
 pytest
+pytest-asyncio
