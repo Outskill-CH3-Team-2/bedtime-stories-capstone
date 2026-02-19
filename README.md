@@ -77,3 +77,39 @@ To ensure the "Fire and Poll" logic and the mock response loading are working co
     python tests/test_api.py
     ```
 3.  The test script will output the job ID, show polling progress, and print the generated story text once the state transitions to `completed`.
+
+# 🧪 Testing the AI Pipeline
+
+The project features a layered testing suite for the LangGraph orchestrator. These tests are designed to be run from the root directory.
+
+### Test Levels
+We use a "Level" system to allow testing even without active API keys:
+
+* **Level 1 (Unit):** Pure logic tests. No API key needed. Mocks all AI calls.
+* **Level 2 (API):** Tests FastAPI endpoints using `TestClient`. No API key needed.
+* **Level 3 (Smoke):** Makes **real** single calls to OpenRouter (Text, TTS, Image). *Requires API Key.*
+* **Level 4 (E2E):** Runs a full multi-turn story through the real pipeline. *Requires API Key.*
+
+### How to Run
+
+**1. Run all safe tests (No API key required):**
+```bash
+python -m pytest tests/test_pipeline_local.py -v -m "not requires_key"
+```
+
+**2. Run specific levels:**
+```bash
+# Only Unit Tests
+python -m pytest tests/test_pipeline_local.py -v -k "Level1"
+
+# Real API Integration Tests (Cost: ~$0.01 - $0.10)
+python -m pytest tests/test_pipeline_local.py -v -k "Level3 or Level4"
+```
+
+**3. Standalone Runner (Alternative):**
+If you don't have `pytest` installed, you can run the suite directly:
+```bash
+python tests/test_pipeline_local.py
+```
+
+> **Note:** Level 3 and 4 tests will be automatically skipped if `OPENROUTER_API_KEY` is not detected in your `.env` file.
