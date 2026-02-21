@@ -4,7 +4,6 @@ from fastapi import FastAPI, BackgroundTasks, HTTPException
 from pydantic import BaseModel, Field
 from typing import List, Optional
 
-app = FastAPI(title="Story Weaver API")
 
 # In-memory store for sessions and jobs
 sessions = {}

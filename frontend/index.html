@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Story Weaver — AI-powered interactive bedtime stories for children. A magical storytelling experience with illustrations, narration, and choices.">
+  <title>Story Weaver — Bedtime Stories</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📖</text></svg>">
+</head>
+<body data-state="INIT">
+
+  <!-- Page-turn transition overlay -->
+  <div class="page-turn-overlay" id="page-turn-overlay" aria-hidden="true"></div>
+
+  <!-- Celebration particles container (activated on END state) -->
+  <div class="particles" id="particles" aria-hidden="true"></div>
+
+  <div class="app-container">
+
+    <!-- ================================================================
+         INIT STATE — Welcome Screen
+         ================================================================ -->
+    <section id="state-init" class="state-section" aria-label="Start a new story">
+      <div class="hero-icon" aria-hidden="true">📖</div>
+      <h1 class="hero-title">Story Weaver</h1>
+      <p class="hero-subtitle">Tell us what's on your mind, and we'll spin it into a magical bedtime tale.</p>
+
+      <form class="input-group" id="start-form" autocomplete="off">
+        <!-- Scenario prompt -->
+        <label class="input-label" for="prompt-input">What's happening tomorrow?</label>
+        <input
+          type="text"
+          id="prompt-input"
+          class="input-field prompt-input"
+          placeholder='e.g. "Tomorrow we are going to the dentist"'
+          required
+          maxlength="300"
+          aria-describedby="prompt-hint"
+        >
+        <span id="prompt-hint" class="sr-only">Enter a scenario or event and we'll create a bedtime story around it.</span>
+
+        <!-- Child name + age row -->
+        <div class="input-row">
+          <div style="flex:1; display:flex; flex-direction:column; gap:var(--sp-1);">
+            <label class="input-label" for="child-name">Child's Name</label>
+            <input
+              type="text"
+              id="child-name"
+              class="input-field"
+              placeholder="e.g. Alex"
+              required
+              maxlength="30"
+            >
+          </div>
+          <div style="display:flex; flex-direction:column; gap:var(--sp-1);">
+            <label class="input-label" for="child-age">Age</label>
+            <select id="child-age" class="input-field input-field--small" required>
+              <option value="" disabled selected>Age</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Start button -->
+        <button type="submit" class="btn-primary" id="btn-start">
+          <span class="btn-icon" aria-hidden="true">✨</span>
+          Start Story
+        </button>
+      </form>
+    </section>
+
+    <!-- ================================================================
+         INTRO STATE — Book Opening Animation
+         ================================================================ -->
+    <section id="state-intro" class="state-section" aria-label="Story is beginning">
+      <div class="book-opening" aria-hidden="true">
+        <div class="book-pages"></div>
+        <div class="book-cover"></div>
+      </div>
+      <p class="intro-text">Your adventure is about to begin…</p>
+    </section>
+
+    <!-- ================================================================
+         LOADING STATE — Generating Chapter
+         ================================================================ -->
+    <section id="state-loading" class="state-section" aria-label="Generating your story">
+      <div class="loading-book" aria-hidden="true">
+        <div class="loading-book-body"></div>
+        <div class="loading-book-pages"></div>
+        <div class="loading-sparkle">✨</div>
+      </div>
+      <p class="loading-text">Weaving your story<span class="loading-dots"></span></p>
+      <p class="loading-status" id="loading-status">Preparing the magic…</p>
+    </section>
+
+    <!-- ================================================================
+         CHAPTER STATE — Story Display
+         ================================================================ -->
+    <section id="state-chapter" class="state-section" aria-label="Story chapter">
+
+      <!-- Chapter badge -->
+      <div class="chapter-header">
+        <span class="chapter-number" id="chapter-number">Chapter 1</span>
+      </div>
+
+      <!-- Story content "book" -->
+      <div class="story-book">
+        <!-- Illustration -->
+        <div class="story-illustration-wrapper" id="illustration-wrapper">
+          <img class="story-illustration" id="story-illustration" alt="Story illustration" src="">
+        </div>
+
+        <!-- Story text -->
+        <div class="story-text" id="story-text"></div>
+
+        <hr class="story-divider">
+
+        <!-- Audio player -->
+        <div class="audio-player" id="audio-player">
+          <button class="btn-audio" id="btn-audio" aria-label="Play narration" type="button">
+            ▶
+          </button>
+          <div class="waveform" aria-hidden="true">
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+          </div>
+          <span class="audio-label">Narration</span>
+        </div>
+      </div>
+
+      <!-- Choices -->
+      <div class="choices-container" id="choices-container"></div>
+    </section>
+
+    <!-- ================================================================
+         END STATE — Story Complete
+         ================================================================ -->
+    <section id="state-end" class="state-section" aria-label="Story complete">
+      <div class="end-celebration" aria-hidden="true">🌟</div>
+      <h2 class="end-title">The End</h2>
+
+      <div class="end-illustration-wrapper" id="end-illustration-wrapper">
+        <img class="end-illustration" id="end-illustration" alt="Final story illustration" src="">
+      </div>
+
+      <p class="end-story-text" id="end-story-text"></p>
+
+      <!-- Audio player for ending -->
+      <div class="audio-player" id="end-audio-player">
+        <button class="btn-audio" id="btn-end-audio" aria-label="Play ending narration" type="button">
+          ▶
+        </button>
+        <div class="waveform" aria-hidden="true">
+          <div class="waveform-bar"></div>
+          <div class="waveform-bar"></div>
+          <div class="waveform-bar"></div>
+          <div class="waveform-bar"></div>
+          <div class="waveform-bar"></div>
+        </div>
+        <span class="audio-label">Narration</span>
+      </div>
+
+      <button class="btn-primary" id="btn-new-adventure" type="button">
+        <span class="btn-icon" aria-hidden="true">🚀</span>
+        New Adventure
+      </button>
+    </section>
+
+    <!-- ================================================================
+         ERROR STATE
+         ================================================================ -->
+    <section id="state-error" class="state-section" aria-label="Error occurred">
+      <div class="error-icon" aria-hidden="true">🌙</div>
+      <h2 class="error-title">Oops! A little hiccup…</h2>
+      <p class="error-message" id="error-message">Something went wrong while creating your story. Let's try again!</p>
+      <button class="btn-secondary" id="btn-retry" type="button">
+        Try Again
+      </button>
+      <button class="btn-secondary" id="btn-error-home" type="button" style="margin-top: var(--sp-2);">
+        Back to Start
+      </button>
+    </section>
+
+  </div><!-- /.app-container -->
+
+  <!-- Hidden audio element for narration -->
+  <audio id="narration-audio" preload="none"></audio>
+
+  <script src="app.js"></script>
+</body>
+</html>
