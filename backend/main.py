@@ -1,92 +1,90 @@
 import uuid
-import os
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from backend.contracts import StoryState, StoryStartRequest, ChoiceRequest, StoryStatus
+from backend.orchestrator.pipeline import process_scene
+from backend.session_store import session_store
+from backend.safety.filters import sanitize_input
 
 app = FastAPI(title="Story Weaver API")
 
-# In-memory store for sessions and jobs
-sessions = {}
-jobs = {}
+# --- Background Task Wrapper ---
+async def run_pipeline_task(session_id: str):
+    """
+    Fetches state, runs the LangGraph engine, and updates the store.
+    """
+    state = session_store.get(session_id)
+    if not state:
+        return
 
-# --- Pydantic Models for the New Pipeline ---
-class ChildConfig(BaseModel):
-    child_name: str
-    child_age: int = Field(..., ge=3, le=8)
-
-# Ensure the request model itself has the constraints
-class StoryStartRequest(BaseModel):
-    child_name: str
-    # ge=3, le=8 ensures FastAPI returns 422 for age 2
-    child_age: int = Field(..., ge=3, le=8) 
-
-class ChoiceRequest(BaseModel):
-    session_id: str
-    choice_id: str
-    choice_text: str
+    try:
+        # Run the full graph (Text -> Safety -> Media -> Assembly)
+        scene_result = await process_scene(state)
+        
+        # Update state with the result
+        state.last_result = scene_result
+        state.status = StoryStatus.COMPLETE
+    except Exception as e:
+        print(f"[API] Pipeline failed for {session_id}: {e}")
+        state.status = StoryStatus.FAILED
+    finally:
+        session_store.set(session_id, state)
 
 # --- Endpoints ---
 
-@app.get("/")
-def read_root():
-    # Fix for KeyError: 'mock_mode'
-    return {
-        "status": "Story Weaver API is online",
-        "mock_mode": os.getenv("MOCK_PIPELINES", "false").lower() == "true"
-    }
-
 @app.post("/story/start")
 async def start_story(request: StoryStartRequest, background_tasks: BackgroundTasks):
-    # Fix for 404 and KeyError: 'session_id'
-    session_id = str(uuid.uuid4())
-    sessions[session_id] = {
-        "status": "processing",
-        "child_name": request.child_name,
-        "step": 0
-    }
-    # In a real app, this would trigger the LangGraph pipeline
-    background_tasks.add_task(simulate_pipeline_run, session_id)
-    return {"session_id": session_id}
-
-@app.get("/story/status/{session_id}")
-async def get_story_status(session_id: str):
-    if session_id not in sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return {"status": sessions[session_id]["status"]}
-
-@app.get("/story/result/{session_id}")
-async def get_story_result(session_id: str):
-    if session_id not in sessions or sessions[session_id]["status"] != "complete":
-        raise HTTPException(status_code=400, detail="Result not ready")
-    return sessions[session_id].get("result", {})
+    # 1. Sanitize input
+    safe_config = sanitize_input(request.config)
+    
+    # 2. Create initial state
+    state = StoryState(
+        config=safe_config,
+        story_idea=request.story_idea
+    )
+    
+    # 3. Store and Trigger
+    session_store.set(state.session_id, state)
+    background_tasks.add_task(run_pipeline_task, state.session_id)
+    
+    return {"session_id": state.session_id}
 
 @app.post("/story/choose")
-async def make_choice(request: ChoiceRequest):
-    if request.session_id not in sessions:
+async def make_choice(request: ChoiceRequest, background_tasks: BackgroundTasks):
+    state = session_store.get(request.session_id)
+    if not state:
         raise HTTPException(status_code=404, detail="Session not found")
-    sessions[request.session_id]["step"] += 1
-    return {"step_number": sessions[request.session_id]["step"]}
+    
+    if state.status != StoryStatus.COMPLETE:
+        raise HTTPException(status_code=400, detail="Previous turn not finished")
 
-# --- Legacy Compatibility Endpoints (to keep test_legacy_start passing) ---
-@app.post("/generate/start")
-async def legacy_start(background_tasks: BackgroundTasks):
-    job_id = str(uuid.uuid4())
-    jobs[job_id] = {"status": "pending"}
-    return {"job_id": job_id}
+    # 1. Update history with user choice
+    state.step_number += 1
+    state.messages.append({"role": "user", "content": request.choice_text})
+    state.status = StoryStatus.PENDING
+    
+    # 2. Store and Trigger
+    session_store.set(state.session_id, state)
+    background_tasks.add_task(run_pipeline_task, state.session_id)
+    
+    return {"status": "accepted", "step": state.step_number}
 
-@app.get("/generate/status/{job_id}")
-async def legacy_status(job_id: str):
-    if job_id not in jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    return {"job_id": job_id, "status": "complete"}
+@app.get("/story/status/{session_id}")
+async def get_status(session_id: str):
+    state = session_store.get(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": state.status}
 
-async def simulate_pipeline_run(session_id: str):
-    """Simulates the LangGraph pipeline completion for Level 2 tests."""
-    import asyncio
-    await asyncio.sleep(0.5)
-    sessions[session_id]["status"] = "complete"
-    sessions[session_id]["result"] = {
-        "story_text": "A magical adventure begins!",
-        "choices": [{"id": "c1", "text": "Go left"}, {"id": "c2", "text": "Go right"}]
-    }
+@app.get("/story/result/{session_id}")
+async def get_result(session_id: str):
+    state = session_store.get(session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    if state.status == StoryStatus.FAILED:
+        raise HTTPException(status_code=500, detail="Story generation failed")
+        
+    if state.status != StoryStatus.COMPLETE:
+        raise HTTPException(status_code=400, detail="Result not ready")
+        
+    return state.last_result
