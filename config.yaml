@@ -1,0 +1,21 @@
+# config.yaml
+
+# --- Child's Information ---
+# 'name' and 'age' are mandatory.
+child_info:
+  name: "Marton"
+  age: 5
+
+# --- Personalization Details ---
+# These details help the AI weave a custom story.
+personalization:
+  favourite_colour: "yellow"
+  favourite_food: "marshmallows"
+  favourite_animal: "pig"
+  pet_name: "Pip"
+  pet_type: "hamster"
+  place_to_visit: "Starbucks"
+  favourite_activities:
+    - "building tall towers"
+    - "running fast"
+    - "singing"
