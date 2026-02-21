@@ -1,22 +1,22 @@
 """
-contracts.py — Pydantic models shared across all Story Weaver pipeline modules.
-These are the single source of truth for data shapes; import from here everywhere.
+backend/contracts.py — Shared data models.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List, Dict
 from enum import Enum
 import uuid
 
+# --- Core Configuration Models ---
 
 class Personalization(BaseModel):
     favourite_colour: str = ""
     favourite_animal: str = ""
     favourite_food: str = ""
-    favourite_activities: list[str] = []
+    favourite_activities: List[str] = []
     pet_name: str = ""
     pet_type: str = ""
-
+    place_to_visit: str = ""  # Added based on your config.yaml
 
 class ChildConfig(BaseModel):
     child_name: str = Field(..., max_length=30)
@@ -25,6 +25,17 @@ class ChildConfig(BaseModel):
     reference_image_b64: Optional[str] = None
     personalization: Personalization = Personalization()
 
+# --- API Request Models ---
+
+class StoryStartRequest(BaseModel):
+    config: ChildConfig
+    story_idea: str  # The "one-liner" (e.g., "Going to the dentist")
+
+class ChoiceRequest(BaseModel):
+    session_id: str
+    choice_text: str
+
+# --- Pipeline State Models ---
 
 class StoryStatus(str, Enum):
     PENDING = "pending"
@@ -34,19 +45,11 @@ class StoryStatus(str, Enum):
     COMPLETE = "complete"
     FAILED = "failed"
 
-
-class SafetyResult(BaseModel):
-    passed: bool = True
-    reason: str = ""
-    flags: list[str] = []
-
-
 class Choice(BaseModel):
     id: str
     text: str
     audio_b64: str = ""
     image_b64: str = ""
-
 
 class SceneOutput(BaseModel):
     session_id: str
@@ -55,16 +58,22 @@ class SceneOutput(BaseModel):
     story_text: str = ""
     narration_audio_b64: str = ""
     illustration_b64: str = ""
-    choices: list[Choice] = []
+    choices: List[Choice] = []
     generation_time_ms: int = 0
     safety_passed: bool = True
 
+class SafetyResult(BaseModel):
+    passed: bool = True
+    reason: str = ""
+    flags: List[str] = []
 
 class StoryState(BaseModel):
     session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     step_number: int = 0
     status: StoryStatus = StoryStatus.PENDING
     config: ChildConfig
-    messages: list[dict] = []
-    safety_flags: list[str] = []
+    story_idea: str = ""  # Persist the idea here
+    messages: List[Dict] = []
+    safety_flags: List[str] = []
     rag_context: Optional[str] = None
+    last_result: Optional[SceneOutput] = None # Store the final output here
