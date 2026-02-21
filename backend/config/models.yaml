@@ -2,31 +2,23 @@
 # OpenRouter model identifiers and generation parameters for Story Weaver
 
 text:
-  model: "openai/gpt-4o"
-  max_tokens: 500
+  model: "gpt-4o"
   temperature: 0.85
+  max_tokens: 5000
   # Fallback if primary unavailable
   fallback_model: "anthropic/claude-haiku-4-5"
 
 safety:
   model: "openai/gpt-4o-mini"
-  max_tokens: 200
-  temperature: 0.0  # Deterministic for safety checks
-
-tts:
-  # OpenAI TTS via OpenRouter
-  model: "openai/tts-1"
-  # Valid voices: alloy, echo, fable, onyx, nova, shimmer
-  default_voice: "onyx"
-  speed: 1.0
+  temperature: 0.0
+  max_tokens: 5000
 
 image:
-  # Google Gemini image generation via OpenRouter
-  model: "google/gemini-2.0-flash-exp:free"
-  # Image size for illustrations
+  model: "google/gemini-2.5-flash-image"
   size: "1024x1024"
   quality: "standard"
   style: "vivid"
-  # Placeholder used when real image gen is unavailable
-  placeholder_width: 512
-  placeholder_height: 512
+
+tts:
+  model: "openai/gpt-4o-audio-preview"
+  voice: "onyx"
