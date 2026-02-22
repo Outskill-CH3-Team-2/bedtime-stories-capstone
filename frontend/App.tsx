@@ -224,25 +224,26 @@ const App: React.FC = () => {
       }} />
 
       {/* Idle: Start Screen */}
-      {state.status === 'idle' && (
-        <div className="relative z-10 flex flex-col items-center animate-fadeIn px-4 w-full" style={{ maxWidth: 480 }}>
-          <img src="/ClosedBook.png" alt="A closed storybook" className="w-full"
-            style={{ filter: 'drop-shadow(0 20px 60px rgba(0,0,0,0.8))' }} />
-          <form onSubmit={handleStart} className="w-full mt-6 space-y-4">
-            <textarea
-              value={idea}
-              onChange={(e) => setIdea(e.target.value)}
-              placeholder="Begin a tale about… a brave knight who befriends a dragon"
-              rows={2}
-              className="w-full bg-[#1a0f0a]/80 border border-[#8b4513]/50 rounded-sm p-4 text-base font-serif italic outline-none text-[#f2e8cf] placeholder:text-[#f2e8cf]/25 focus:border-[#8b4513] transition-all resize-none"
-            />
-            <button type="submit"
-              className="w-full py-3 bg-[#8b4513] text-[#f2e8cf] font-cinzel text-sm rounded-sm hover:bg-[#a0521a] transition-all shadow-xl uppercase tracking-[0.3em]">
-              Open the Book
-            </button>
-          </form>
-        </div>
-      )}
+        {state.status === 'idle' && (
+          <div className="relative z-10 flex flex-col items-center animate-fadeIn px-4 w-full" style={{ maxWidth: 480 }}>
+            <img src="/ClosedBook.png" alt="A closed storybook" className="w-full"
+              style={{ filter: 'drop-shadow(0 20px 60px rgba(0,0,0,0.8))' }} />
+            <form onSubmit={handleStart} className="w-full mt-6 space-y-4">
+              <textarea
+                value={idea}
+                onChange={(e) => setIdea(e.target.value)}
+                placeholder="Begin a tale about… a brave knight who befriends a dragon"
+                rows={2}
+                className="w-full bg-[#1a0f0a]/80 border border-[#8b4513]/50 rounded-sm p-4 text-base font-serif italic outline-none text-[#f2e8cf] placeholder:text-[#f2e8cf]/25 focus:border-[#8b4513] transition-all resize-none"
+              />
+
+              <button type="submit"
+                className="w-full py-3 bg-[#8b4513] text-[#f2e8cf] font-cinzel text-sm rounded-sm hover:bg-[#a0521a] transition-all shadow-xl uppercase tracking-[0.3em]">
+                Open the Book
+              </button>
+            </form>
+          </div>
+        )}
 
       {/* Intro video */}
       {showIntro && !showBook && (
