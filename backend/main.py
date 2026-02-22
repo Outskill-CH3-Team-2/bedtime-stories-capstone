@@ -1,11 +1,21 @@
-import uuid
 from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware  # <-- Import CORS Middleware
 from backend.contracts import StoryState, StoryStartRequest, ChoiceRequest, StoryStatus
 from backend.orchestrator.pipeline import process_scene
 from backend.session_store import session_store
 from backend.safety.filters import sanitize_input
 
 app = FastAPI(title="Story Weaver API")
+
+# --- CORS Configuration ---
+# This allows requests from your frontend (e.g., localhost:3000)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins (change to specific domain in production)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (GET, POST, OPTIONS, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
 
 # --- Background Task Wrapper ---
 async def run_pipeline_task(session_id: str):
@@ -22,7 +32,11 @@ async def run_pipeline_task(session_id: str):
         
         # Update state with the result
         state.last_result = scene_result
-        state.status = StoryStatus.COMPLETE
+        
+        # Don't overwrite FAILED status if the pipeline set it
+        if state.status != StoryStatus.FAILED:
+            state.status = StoryStatus.COMPLETE
+            
     except Exception as e:
         print(f"[API] Pipeline failed for {session_id}: {e}")
         state.status = StoryStatus.FAILED
@@ -67,6 +81,7 @@ async def make_choice(request: ChoiceRequest, background_tasks: BackgroundTasks)
     background_tasks.add_task(run_pipeline_task, state.session_id)
     
     return {"status": "accepted", "step": state.step_number}
+
 
 @app.get("/story/status/{session_id}")
 async def get_status(session_id: str):
