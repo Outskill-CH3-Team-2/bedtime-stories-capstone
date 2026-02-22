@@ -1,11 +1,49 @@
+import os
+import base64
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from fastapi.middleware.cors import CORSMiddleware  # <-- Import CORS Middleware
-from backend.contracts import StoryState, StoryStartRequest, ChoiceRequest, StoryStatus
+from fastapi.middleware.cors import CORSMiddleware
+from backend.contracts import (
+    StoryState, StoryStartRequest, ChoiceRequest, StoryStatus,
+    CharacterRef, AddCharacterRequest,
+)
 from backend.orchestrator.pipeline import process_scene
 from backend.session_store import session_store
 from backend.safety.filters import sanitize_input
+from utils.download_assets import download_if_missing
 
-app = FastAPI(title="Story Weaver API")
+# Resolve paths relative to project root (one level above this file's package)
+_PROJECT_ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PUBLIC_DIR     = os.path.join(_PROJECT_ROOT, "frontend", "public")
+_PUBLIC_PROPS   = os.path.join(_PUBLIC_DIR, "binaries.properties")
+_CHILD_PHOTO    = os.path.join(_PUBLIC_DIR, "child_photo_01.png")
+
+# Loaded once at startup; injected into every new session (never sent to client)
+_protagonist_image_b64: str | None = None
+
+
+def _load_protagonist_image() -> str | None:
+    if not os.path.exists(_CHILD_PHOTO):
+        print(f"[startup] child_photo_01.png not found at {_CHILD_PHOTO} — images will have no reference")
+        return None
+    with open(_CHILD_PHOTO, "rb") as f:
+        data = base64.b64encode(f.read()).decode()
+    print(f"[startup] Protagonist reference image loaded ({len(data)} chars base64)")
+    return f"data:image/png;base64,{data}"
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _protagonist_image_b64
+    # 1. Download any missing public-folder assets (intro video, child photo, etc.)
+    if os.path.exists(_PUBLIC_PROPS):
+        print("[startup] Checking public assets...")
+        download_if_missing(_PUBLIC_PROPS, _PUBLIC_DIR)
+    # 2. Load protagonist reference image into memory once
+    _protagonist_image_b64 = _load_protagonist_image()
+    yield
+
+app = FastAPI(title="Story Weaver API", lifespan=lifespan)
 
 # --- CORS Configuration ---
 # This allows requests from your frontend (e.g., localhost:3000)
@@ -47,20 +85,51 @@ async def run_pipeline_task(session_id: str):
 
 @app.post("/story/start")
 async def start_story(request: StoryStartRequest, background_tasks: BackgroundTasks):
-    # 1. Sanitize input
+    # 1. Sanitize text fields
     safe_config = sanitize_input(request.config)
-    
+
     # 2. Create initial state
     state = StoryState(
         config=safe_config,
-        story_idea=request.story_idea
+        story_idea=request.story_idea,
     )
-    
-    # 3. Store and Trigger
+
+    # 3. Register protagonist from server memory (loaded at startup from child_photo_01.png)
+    #    Falls back to request payload if provided (for future config page), then to nothing.
+    ref_image = _protagonist_image_b64 or request.protagonist_image_b64
+    if ref_image:
+        state.characters[safe_config.child_name.lower()] = CharacterRef(
+            name=safe_config.child_name,
+            role="protagonist",
+            image_b64=ref_image,
+        )
+        print(f"[API] Protagonist image registered for session {state.session_id} ({safe_config.child_name})")
+    else:
+        print(f"[API] No protagonist reference image — session {state.session_id} will generate without it")
+
+    # 4. Store and trigger pipeline
     session_store.set(state.session_id, state)
     background_tasks.add_task(run_pipeline_task, state.session_id)
-    
+
     return {"session_id": state.session_id}
+
+
+@app.post("/story/character")
+async def add_character(request: AddCharacterRequest):
+    """
+    Add or update a side-character reference image for an existing session.
+    Call this after /story/start to register recurring side characters.
+    The image is stored only in server memory for the lifetime of the session.
+    """
+    state = session_store.get(request.session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    char = request.character
+    state.characters[char.name.lower()] = char
+    session_store.set(request.session_id, state)
+    print(f"[API] Character '{char.name}' ({char.role}) added to session {request.session_id}")
+    return {"status": "ok", "character": char.name}
 
 @app.post("/story/choose")
 async def make_choice(request: ChoiceRequest, background_tasks: BackgroundTasks):

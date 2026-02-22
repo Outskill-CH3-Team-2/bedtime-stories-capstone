@@ -159,19 +159,25 @@ async def node_generate_media(state: PipelineState) -> dict:
     ss: StoryState = state["story_state"]
     ss.status = StoryStatus.GENERATING_MEDIA
 
-    ref_b64 = ss.config.reference_image_b64
     narrative = state["narrative"]
     choices_raw = state["choices_raw"]
     voice = ss.config.voice
+
+    # Collect character refs from session: protagonist first, then side characters.
+    # Protagonist always goes first so the model prompt attribution is consistent.
+    characters = sorted(
+        ss.characters.values(),
+        key=lambda c: (0 if c.role == "protagonist" else 1, c.name),
+    )
 
     # Create all tasks up front
     # 1. Narration
     narration_audio_task = asyncio.create_task(
         generate_audio(narrative, voice=voice)
     )
-    # 2. Main Illustration
+    # 2. Main Illustration — pass character refs, not a raw b64 string
     main_image_task = asyncio.create_task(
-        generate_image(narrative, reference_image_b64=ref_b64)
+        generate_image(narrative, characters=characters or None)
     )
     
     # We skip choice media for this iteration to save tokens/time, 
