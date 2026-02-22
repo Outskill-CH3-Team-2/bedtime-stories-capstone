@@ -1,91 +1,188 @@
 """
-backend/pipelines/image.py — Real Image Generation using Gemini via OpenRouter.
+backend/pipelines/image.py — Storybook illustration generation via Gemini / OpenRouter.
+
+generate_image(prompt, characters) accepts a list of CharacterRef objects so that
+the protagonist photo AND any side-character reference images are all passed to the
+model in a single multimodal call — exactly the same pattern that works in
+tests/test_image_gen.py.
+
+Reference images are NEVER written to disk or returned to the client.
+They live only in the per-session StoryState.characters dict (server memory).
 """
 from __future__ import annotations
+
 import base64
+import re
 import yaml
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
+
+from backend.contracts import CharacterRef
 from backend.pipelines.provider import get_client
 
 _CONFIG_DIR = Path(__file__).parent.parent / "config"
 
-def _get_models() -> dict:
-    with open(_CONFIG_DIR / "models.yaml") as f:
-        return yaml.safe_load(f)
 
-async def generate_image(prompt: str, reference_image_b64: Optional[str] = None) -> bytes:
+def _get_model() -> str:
+    with open(_CONFIG_DIR / "models.yaml") as f:
+        cfg = yaml.safe_load(f)
+    return cfg["image"]["model"]
+
+
+# ---------------------------------------------------------------------------
+# Prompt builder
+# ---------------------------------------------------------------------------
+
+def _build_image_prompt(narrative: str, characters: List[CharacterRef]) -> str:
+    style = (
+        "Children's storybook illustration, warm painterly style, "
+        "vibrant colours, soft lighting, highly detailed, whimsical."
+    )
+
+    if not characters:
+        return (
+            f"Create a storybook illustration for the following scene.\n\n"
+            f"Scene: {narrative}\n\n"
+            f"Style: {style}"
+        )
+
+    # Build a per-character instruction so the model knows which image is which
+    char_lines = []
+    for c in characters:
+        if c.role == "protagonist":
+            line = (
+                f"- The MAIN CHILD CHARACTER must look exactly like the child "
+                f"in the first reference photo (same face, hair, features"
+                + (f": {c.description}" if c.description else "")
+                + ")."
+            )
+        else:
+            line = (
+                f"- The character named '{c.name}' must match their reference photo"
+                + (f" ({c.description})" if c.description else "")
+                + ". Only include this character if they appear in the scene."
+            )
+        char_lines.append(line)
+
+    char_block = "\n".join(char_lines)
+
+    return (
+        f"Create a storybook illustration for the following scene.\n\n"
+        f"Character consistency rules (reference photos are attached in order):\n"
+        f"{char_block}\n\n"
+        f"Scene: {narrative}\n\n"
+        f"Style: {style}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Response parser
+# ---------------------------------------------------------------------------
+
+def _normalise_b64(raw: str) -> str:
+    """Ensure the string is a proper data-URI."""
+    if raw.startswith("data:image"):
+        return raw
+    return f"data:image/png;base64,{raw}"
+
+
+def _extract_image_bytes(resp_dict: dict) -> Optional[bytes]:
     """
-    Generates an image using Gemini 2.5 Flash.
-    Strictly follows the multimodal payload format from test_image_gen.py.
+    Extract image bytes from an OpenRouter/Gemini response.
+    Handles three known shapes:
+      1. message.images[0].url  (standard OpenRouter image output)
+      2. message.content as list of content-part dicts  (type=image_url)
+      3. message.content as plain string containing a URL  (rare fallback)
     """
-    models = _get_models()
-    model_name = models["image"]["model"]
+    for choice in resp_dict.get("choices", []):
+        message = choice.get("message", {})
+
+        # Shape 1: message has an 'images' list
+        for img in message.get("images") or []:
+            url = img.get("url") or (img.get("image_url") or {}).get("url", "")
+            if url and "base64," in url:
+                return base64.b64decode(url.split("base64,")[1])
+            if url and url.startswith("http"):
+                return url  # type: ignore[return-value]  caller downloads
+
+        # Shape 2: message.content is a list of content-part objects
+        content = message.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if part.get("type") == "image_url":
+                    url = (part.get("image_url") or {}).get("url", "")
+                    if url and "base64," in url:
+                        return base64.b64decode(url.split("base64,")[1])
+                    if url and url.startswith("http"):
+                        return url  # type: ignore[return-value]
+
+        # Shape 3: plain-string content with a URL
+        if isinstance(content, str) and "http" in content:
+            m = re.search(r"(https?://\S+)", content)
+            if m:
+                return m.group(1)  # type: ignore[return-value]
+
+    # Nothing found — log what was actually present for diagnostics
+    choices = resp_dict.get("choices") or []
+    msg_keys = list((choices[0].get("message", {}) if choices else {}).keys())
+    print(f"[image_gen] No image in response. message keys: {msg_keys}")
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+async def generate_image(
+    prompt: str,
+    characters: Optional[List[CharacterRef]] = None,
+) -> bytes:
+    """
+    Generate a storybook illustration.
+
+    Args:
+        prompt:     The narrative scene text.
+        characters: List of CharacterRef objects whose reference images should
+                    guide character appearance.  Protagonist first, then side
+                    characters.  Pass None / [] for no reference images.
+
+    Returns:
+        Raw PNG bytes, or b"" on failure.
+    """
+    chars = characters or []
+    model_name = _get_model()
     client = get_client()
 
-    # 1. Start with the text prompt
-    content = [{"type": "text", "text": prompt}]
+    image_prompt = _build_image_prompt(prompt, chars)
 
-    # 2. Append Reference Image if provided
-    # Note: test_image_gen.py uses a list, here we support a single reference for now
-    if reference_image_b64:
-        # Ensure it has the correct Data URL header
-        if not reference_image_b64.startswith("data:image"):
-            image_url = f"data:image/png;base64,{reference_image_b64}"
-        else:
-            image_url = reference_image_b64
-            
-        content.append({
-            "type": "image_url", 
-            "image_url": {"url": image_url}
-        })
+    # Build multimodal content: text instruction first, then reference images in order
+    content: list = [{"type": "text", "text": image_prompt}]
+    for c in chars:
+        data_uri = _normalise_b64(c.image_b64)
+        content.append({"type": "image_url", "image_url": {"url": data_uri}})
 
     try:
-        # 3. Call OpenRouter/Gemini
         response = await client.chat.completions.create(
             model=model_name,
             messages=[{"role": "user", "content": content}],
-            modalities=["image"] # Vital for triggering image output
+            modalities=["image"],
         )
 
-        # 4. Extract Image from Response (Robust handling)
         resp_dict = response.model_dump()
-        
-        # Iterate through choices to find the image
-        for choice in resp_dict.get("choices", []):
-            message = choice.get("message", {})
-            
-            # Check for 'images' list (OpenRouter standard for some models)
-            images = message.get("images", [])
-            
-            # Fallback: Check content string for markdown image links
-            content_str = message.get("content", "")
-            
-            target_url = None
-            
-            if images:
-                target_url = images[0].get("url") or images[0].get("image_url", {}).get("url")
-            elif "http" in content_str and (".png" in content_str or ".jpg" in content_str or "generated" in content_str):
-                # Simple extraction if URL is embedded in text
-                import re
-                url_match = re.search(r'(https?://[^\s)]+)', content_str)
-                if url_match:
-                    target_url = url_match.group(1)
+        result = _extract_image_bytes(resp_dict)
 
-            # 5. Decode or Download
-            if target_url:
-                if "base64," in target_url:
-                    return base64.b64decode(target_url.split("base64,")[1])
-                else:
-                    # It's a remote URL, download it
-                    import httpx
-                    async with httpx.AsyncClient() as http:
-                        r = await http.get(target_url)
-                        return r.content
+        if result is None:
+            return b""
 
-        print("[Image Gen] No valid image found in response.")
-        return b""
+        # If result is a URL string, download it
+        if isinstance(result, str):
+            import httpx
+            async with httpx.AsyncClient(timeout=30) as http:
+                r = await http.get(result)
+                return r.content
+
+        return result
 
     except Exception as e:
-        print(f"[Image Gen] Error: {e}")
+        print(f"[image_gen] Error: {e}")
         return b""
