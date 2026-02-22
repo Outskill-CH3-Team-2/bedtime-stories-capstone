@@ -84,8 +84,7 @@ def sanitize_input(config: ChildConfig) -> ChildConfig:
       - Block prompt injection patterns (field is cleared if detected)
       - Enforce max lengths
 
-    Numeric fields (child_age) are clamped to valid range by Pydantic validators.
-    The reference_image_b64 field is left untouched (binary data, not used in prompts).
+      Numeric fields (child_age) are clamped to valid range by Pydantic validators.
     """
     # Work on a deep copy so the original is unchanged
     data = config.model_dump()
