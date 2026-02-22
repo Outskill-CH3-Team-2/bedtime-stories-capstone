@@ -1,0 +1,7 @@
+{
+  "name": "Arlo's Storybook Adventure",
+  "description": "An interactive AI-powered storybook with a classic aesthetic, page-turning animations, and voice narration.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
