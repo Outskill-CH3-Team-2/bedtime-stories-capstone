@@ -40,16 +40,41 @@ class CharacterRef(BaseModel):
     image_b64: str              # data:image/...;base64,... OR raw base64
     description: str = ""
 
-# --- API Request Models ---
+# --- API Request/Response Models ---
 
-class StoryStartRequest(BaseModel):
-    config: ChildConfig
-    story_idea: str                         # e.g. "Going to the dentist"
-    protagonist_image_b64: Optional[str] = None  # child photo, sent once at story start
+class GenerateRequest(BaseModel):
+    """
+    Unified generate endpoint — first chapter or next chapter.
 
-class ChoiceRequest(BaseModel):
+    First chapter:  session_id=None, config+story_idea required.
+    Next chapter:   session_id set, choice_text set (the branch to pre-generate).
+
+    Pre-generation: fire one request per available choice immediately after
+    displaying a scene — all branches generate in parallel.
+
+    Committing selected history: on the NEXT round of pre-generation, pass
+    prev_job_id + prev_choice_text so the backend can commit the selected
+    branch's conversation history before snapshotting for new jobs.
+
+    Returns job_id immediately; poll /story/status/{job_id} then
+    fetch /story/result/{job_id}.
+    """
+    # --- first chapter only ---
+    config: Optional[ChildConfig] = None
+    story_idea: Optional[str] = None
+    protagonist_image_b64: Optional[str] = None
+
+    # --- next chapter only ---
+    session_id: Optional[str] = None
+    choice_text: Optional[str] = None      # branch to generate for this job
+
+    # --- history commit (next chapter only, first call of a new round) ---
+    prev_job_id: Optional[str] = None      # job_id the user selected last round
+    prev_choice_text: Optional[str] = None # choice text they selected (for history)
+
+class GenerateResponse(BaseModel):
     session_id: str
-    choice_text: str
+    job_id: str
 
 class AddCharacterRequest(BaseModel):
     """Add a side-character reference to an existing session."""
@@ -83,6 +108,14 @@ class SceneOutput(BaseModel):
     generation_time_ms: int = 0
     safety_passed: bool = True
 
+class JobState(BaseModel):
+    """Tracks a single generation job (one chapter for one choice branch)."""
+    job_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    session_id: str
+    status: StoryStatus = StoryStatus.PENDING
+    result: Optional[SceneOutput] = None  # filled when COMPLETE
+    raw_text: str = ""                    # LLM raw response — committed to session on user selection
+
 class SafetyResult(BaseModel):
     passed: bool = True
     reason: str = ""
@@ -90,6 +123,7 @@ class SafetyResult(BaseModel):
 
 class StoryState(BaseModel):
     session_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    job_id: str = ""          # set by main.py so pipeline logs can tag which job produced each artefact
     step_number: int = 0
     status: StoryStatus = StoryStatus.PENDING
     config: ChildConfig
@@ -97,7 +131,6 @@ class StoryState(BaseModel):
     messages: List[Dict] = []
     safety_flags: List[str] = []
     rag_context: Optional[str] = None
-    last_result: Optional[SceneOutput] = None
     # Per-session character registry — stored in server memory only, never sent to client.
     # Key = character name (lowercase), value = CharacterRef with reference image.
     characters: Dict[str, CharacterRef] = {}
