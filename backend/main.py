@@ -1,14 +1,17 @@
+import io
 import os
 import base64
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel as _BaseModel
 from backend.contracts import (
-    StoryState, StoryStartRequest, ChoiceRequest, StoryStatus,
+    StoryState, StoryStatus,
+    GenerateRequest, GenerateResponse,
     CharacterRef, AddCharacterRequest,
 )
 from backend.orchestrator.pipeline import process_scene
-from backend.session_store import session_store
+from backend.session_store import session_store, job_store
 from backend.safety.filters import sanitize_input
 from utils.download_assets import download_if_missing
 
@@ -45,80 +48,147 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Story Weaver API", lifespan=lifespan)
 
-# --- CORS Configuration ---
-# This allows requests from your frontend (e.g., localhost:3000)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins (change to specific domain in production)
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods (GET, POST, OPTIONS, etc.)
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# --- Background Task Wrapper ---
-async def run_pipeline_task(session_id: str):
+
+# ---------------------------------------------------------------------------
+# Background task
+# ---------------------------------------------------------------------------
+
+async def run_pipeline_task(job_id: str, session_id: str, choice_text: str = ""):
     """
-    Fetches state, runs the LangGraph engine, and updates the store.
+    Run the pipeline for one job.
+
+    Each job works on a snapshot of the session state so that parallel
+    pre-generation jobs (one per choice branch) don't corrupt each other's
+    conversation history.  The choice_text for this branch is appended to the
+    snapshot before running so the LLM sees the correct context.
     """
+    job = job_store.get(job_id)
     state = session_store.get(session_id)
-    if not state:
+    if not job or not state:
         return
 
+    # Snapshot: deep-copy so parallel jobs don't race on ss.messages / ss.status
+    state_snapshot = state.model_copy(deep=True)
+    state_snapshot.job_id = job_id   # tag snapshot so pipeline logs show which job = which artefact
+
+    # Append this branch's choice to the snapshot (not the live session)
+    if choice_text:
+        state_snapshot.step_number += 1
+        state_snapshot.messages.append({"role": "user", "content": choice_text})
+
     try:
-        # Run the full graph (Text -> Safety -> Media -> Assembly)
-        scene_result = await process_scene(state)
-        
-        # Update state with the result
-        state.last_result = scene_result
-        
-        # Don't overwrite FAILED status if the pipeline set it
-        if state.status != StoryStatus.FAILED:
-            state.status = StoryStatus.COMPLETE
-            
+        scene_result = await process_scene(state_snapshot)
+        job.status = StoryStatus.COMPLETE
+        job.result = scene_result
+        # Store the assistant response so it can be committed to the live session
+        # when the user selects this branch.
+        last_msg = state_snapshot.messages[-1] if state_snapshot.messages else {}
+        if last_msg.get("role") == "assistant":
+            job.raw_text = last_msg["content"]
+
     except Exception as e:
-        print(f"[API] Pipeline failed for {session_id}: {e}")
-        state.status = StoryStatus.FAILED
+        print(f"[API] Pipeline failed for job={job_id} session={session_id}: {e}")
+        job.status = StoryStatus.FAILED
     finally:
-        session_store.set(session_id, state)
+        job_store.update(job)
 
-# --- Endpoints ---
 
-@app.post("/story/start")
-async def start_story(request: StoryStartRequest, background_tasks: BackgroundTasks):
-    # 1. Sanitize text fields
-    safe_config = sanitize_input(request.config)
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
-    # 2. Create initial state
-    state = StoryState(
-        config=safe_config,
-        story_idea=request.story_idea,
-    )
+@app.post("/story/generate", response_model=GenerateResponse)
+async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
+    """
+    Unified generate endpoint for first chapter AND subsequent chapters.
 
-    # 3. Register protagonist from server memory (loaded at startup from child_photo_01.png)
-    #    Falls back to request payload if provided (for future config page), then to nothing.
-    ref_image = _protagonist_image_b64 or request.protagonist_image_b64
-    if ref_image:
-        state.characters[safe_config.child_name.lower()] = CharacterRef(
-            name=safe_config.child_name,
-            role="protagonist",
-            image_b64=ref_image,
+    First chapter (session_id absent):
+        - Requires config + story_idea.
+        - Creates a new session, registers the protagonist image, fires generation.
+        - Returns { session_id, job_id }.
+
+    Next chapter (session_id present):
+        - Requires choice_text (the chosen option text).
+        - Looks up the existing session, advances conversation history, fires generation.
+        - Returns { session_id, job_id }.
+
+    The caller is expected to fire one job per available choice (pre-generation).
+    Each fires independently; only the job matching the user's selection matters.
+    """
+    if not request.session_id:
+        # ── First chapter ──────────────────────────────────────────────────
+        if not request.config or not request.story_idea:
+            raise HTTPException(status_code=422, detail="config and story_idea required for first chapter")
+
+        safe_config = sanitize_input(request.config)
+
+        state = StoryState(
+            config=safe_config,
+            story_idea=request.story_idea,
         )
-        print(f"[API] Protagonist image registered for session {state.session_id} ({safe_config.child_name})")
+
+        # Register protagonist: server-loaded image > request payload > nothing
+        ref_image = _protagonist_image_b64 or request.protagonist_image_b64
+        if ref_image:
+            state.characters[safe_config.child_name.lower()] = CharacterRef(
+                name=safe_config.child_name,
+                role="protagonist",
+                image_b64=ref_image,
+            )
+            print(f"[API] Protagonist registered for session {state.session_id} ({safe_config.child_name})")
+        else:
+            print(f"[API] No protagonist image — session {state.session_id} will generate without reference")
+
+        session_store.set(state.session_id, state)
+
     else:
-        print(f"[API] No protagonist reference image — session {state.session_id} will generate without it")
+        # ── Next chapter ───────────────────────────────────────────────────
+        # The frontend fires one job per available choice immediately after
+        # displaying a scene (pre-generation).  These jobs must NOT mutate the
+        # live session — each gets a snapshot with its own choice appended.
+        # The session history is advanced lazily: when the user fires the
+        # FOLLOWING round's pre-generation jobs, pass `prev_job_id` so we can
+        # commit the selected branch's history first.
+        if not request.choice_text:
+            raise HTTPException(status_code=422, detail="choice_text required for next chapter")
 
-    # 4. Store and trigger pipeline
-    session_store.set(state.session_id, state)
-    background_tasks.add_task(run_pipeline_task, state.session_id)
+        state = session_store.get(request.session_id)
+        if not state:
+            raise HTTPException(status_code=404, detail="Session not found")
 
-    return {"session_id": state.session_id}
+        # If the caller tells us which job was selected in the previous round,
+        # commit that branch's history to the live session now.
+        if request.prev_job_id:
+            prev_job = job_store.get(request.prev_job_id)
+            if prev_job and prev_job.status == StoryStatus.COMPLETE and prev_job.raw_text:
+                # Commit: user choice + assistant response from the selected job
+                state.step_number += 1
+                state.messages.append({"role": "user", "content": request.prev_choice_text or ""})
+                state.messages.append({"role": "assistant", "content": prev_job.raw_text})
+                session_store.set(state.session_id, state)
+                print(f"[API] Committed job {request.prev_job_id} history to session {state.session_id} step={state.step_number}")
+
+    # ── Create job and fire ────────────────────────────────────────────────
+    job = job_store.create(state.session_id)
+    branch_choice = request.choice_text or ""
+    background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, branch_choice)
+
+    print(f"[API] Job {job.job_id} queued for session {state.session_id} step={state.step_number} choice='{branch_choice[:40]}'")
+    return GenerateResponse(session_id=state.session_id, job_id=job.job_id)
 
 
 @app.post("/story/character")
 async def add_character(request: AddCharacterRequest):
     """
     Add or update a side-character reference image for an existing session.
-    Call this after /story/start to register recurring side characters.
     The image is stored only in server memory for the lifetime of the session.
     """
     state = session_store.get(request.session_id)
@@ -131,44 +201,107 @@ async def add_character(request: AddCharacterRequest):
     print(f"[API] Character '{char.name}' ({char.role}) added to session {request.session_id}")
     return {"status": "ok", "character": char.name}
 
-@app.post("/story/choose")
-async def make_choice(request: ChoiceRequest, background_tasks: BackgroundTasks):
-    state = session_store.get(request.session_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    if state.status != StoryStatus.COMPLETE:
-        raise HTTPException(status_code=400, detail="Previous turn not finished")
 
-    # 1. Update history with user choice
-    state.step_number += 1
-    state.messages.append({"role": "user", "content": request.choice_text})
-    state.status = StoryStatus.PENDING
-    
-    # 2. Store and Trigger
-    session_store.set(state.session_id, state)
-    background_tasks.add_task(run_pipeline_task, state.session_id)
-    
-    return {"status": "accepted", "step": state.step_number}
+@app.get("/story/status/{job_id}")
+async def get_status(job_id: str):
+    job = job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"status": job.status, "job_id": job_id, "session_id": job.session_id}
 
 
-@app.get("/story/status/{session_id}")
-async def get_status(session_id: str):
-    state = session_store.get(session_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return {"status": state.status}
+@app.get("/story/result/{job_id}")
+async def get_result(job_id: str):
+    job = job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
 
-@app.get("/story/result/{session_id}")
-async def get_result(session_id: str):
-    state = session_store.get(session_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    if state.status == StoryStatus.FAILED:
+    if job.status == StoryStatus.FAILED:
         raise HTTPException(status_code=500, detail="Story generation failed")
-        
-    if state.status != StoryStatus.COMPLETE:
+
+    if job.status != StoryStatus.COMPLETE:
         raise HTTPException(status_code=400, detail="Result not ready")
-        
-    return state.last_result
+
+    return job.result
+
+
+# ---------------------------------------------------------------------------
+# Debug: STT transcription endpoint (temporary diagnostic)
+# ---------------------------------------------------------------------------
+
+class SttRequest(_BaseModel):
+    audio_b64: str      # raw base64 WAV (no data-URI prefix)
+    job_id: str = ""
+    story_text: str = ""
+
+
+@app.post("/story/debug/stt")
+async def debug_stt(req: SttRequest):
+    """
+    Transcribe the given WAV audio (base64) with Whisper and compare to story_text.
+    Returns transcript + whether it matches the story_text (word-overlap %).
+    Temporary diagnostic — remove once audio bug is confirmed fixed.
+    """
+    try:
+        wav_bytes = base64.b64decode(req.audio_b64)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Bad base64: {e}")
+
+    from openai import AsyncOpenAI
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    # OpenRouter does NOT proxy Whisper (405). Call OpenAI directly.
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        print(f"[debug/stt] OPENAI_API_KEY not set — STT diagnostic skipped for job={req.job_id}")
+        return {
+            "job_id": req.job_id,
+            "transcript": "",
+            "story_text_preview": req.story_text[:300],
+            "word_overlap_pct": -1,
+            "match": None,
+            "skipped": True,
+            "reason": "OPENAI_API_KEY not configured",
+        }
+    client = AsyncOpenAI(api_key=api_key)
+
+    audio_file = io.BytesIO(wav_bytes)
+    audio_file.name = "narration.wav"
+
+    try:
+        result = await client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+        )
+        transcript = result.text.strip()
+    except Exception as e:
+        print(f"[debug/stt] Whisper failed: {e}")
+        raise HTTPException(status_code=500, detail=f"STT failed: {e}")
+
+    # Word-overlap metric (jaccard of word sets, case-insensitive)
+    import re
+    def _words(t: str) -> set:
+        return set(re.sub(r"[^a-z0-9\s]", "", t.lower()).split())
+
+    story_words = _words(req.story_text)
+    audio_words = _words(transcript)
+    if story_words or audio_words:
+        overlap = len(story_words & audio_words) / len(story_words | audio_words)
+    else:
+        overlap = 1.0
+
+    print(
+        f"\n[debug/stt] job={req.job_id}\n"
+        f"  TRANSCRIPT : {transcript[:300]!r}\n"
+        f"  STORY_TEXT : {req.story_text[:300]!r}\n"
+        f"  WORD_OVERLAP: {overlap:.0%}\n"
+    )
+
+    return {
+        "job_id": req.job_id,
+        "transcript": transcript,
+        "story_text_preview": req.story_text[:300],
+        "word_overlap_pct": round(overlap * 100, 1),
+        "match": overlap > 0.4,
+    }

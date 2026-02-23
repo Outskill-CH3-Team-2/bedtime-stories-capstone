@@ -16,7 +16,7 @@ import asyncio
 import time
 from typing import Optional
 
-from backend.contracts import StoryState
+from backend.contracts import StoryState, JobState
 
 SESSION_TTL_SECONDS = 3600  # 1 hour
 CLEANUP_INTERVAL_SECONDS = 300  # 5 minutes
@@ -98,3 +98,44 @@ class SessionStore:
 
 # Singleton — import and use this everywhere
 session_store = SessionStore()
+
+
+class JobStore:
+    """
+    In-memory store for generation jobs (job_id → JobState).
+    Jobs expire with their parent session (TTL reuses SESSION_TTL_SECONDS).
+    """
+
+    def __init__(self) -> None:
+        self._store: dict[str, tuple[JobState, float]] = {}
+
+    def create(self, session_id: str) -> JobState:
+        """Create a new PENDING job for session_id, store it, return it."""
+        job = JobState(session_id=session_id)
+        self._store[job.job_id] = (job, time.monotonic())
+        return job
+
+    def get(self, job_id: str) -> Optional[JobState]:
+        entry = self._store.get(job_id)
+        if entry is None:
+            return None
+        job, created_at = entry
+        if time.monotonic() - created_at > SESSION_TTL_SECONDS:
+            del self._store[job_id]
+            return None
+        return job
+
+    def update(self, job: JobState) -> None:
+        """Overwrite an existing job entry (preserves original timestamp)."""
+        entry = self._store.get(job.job_id)
+        ts = entry[1] if entry else time.monotonic()
+        self._store[job.job_id] = (job, ts)
+
+    def prune(self) -> None:
+        now = time.monotonic()
+        expired = [jid for jid, (_, ts) in self._store.items() if now - ts > SESSION_TTL_SECONDS]
+        for jid in expired:
+            del self._store[jid]
+
+
+job_store = JobStore()
