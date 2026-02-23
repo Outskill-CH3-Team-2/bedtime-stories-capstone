@@ -67,12 +67,60 @@ async def generate_text(messages: list[dict]) -> str:
         return "The story is taking a nap... [Try again]"
 
 def parse_response(text: str):
-    # (Same parsing logic as before - kept brief for display)
+    """
+    Extract (narrative, choices) from the raw LLM output.
+
+    The LLM uses several formats depending on which prompt version ran:
+      [Choice A: go left]  [Choice B: go right]   ← old v01 prompt
+      [Choice 1] [Choice 2]                        ← current prompt (label only, text inline)
+      [go left] [go right]                         ← bare brackets
+      1. Go left\n2. Go right                      ← numbered list (NO brackets at all)
+      1) Go left\n2) Go right                      ← numbered list with parens
+
+    Strategy
+    --------
+    1. Try to extract choices from ANY bracket style.
+    2. If that fails, try numbered lists.
+    3. Strip every extracted choice line from the narrative before returning.
+    """
     import re
-    choices = []
-    # Pattern: [Choice A: text]
-    bracketed = re.findall(r"\[(?:Choice\s+[A-Za-z]:\s*)?(.+?)\]", text, re.IGNORECASE)
+
+    # ── 1. Bracket-based extraction ──────────────────────────────────────────
+    # Matches:
+    #   [Choice A: text]   [Choice A text]   [Choice 1: text]   [Choice 1 text]   [bare text]
+    bracketed = re.findall(
+        r"\[(?:Choice\s+[\w]+[:\.]?\s*)?(.+?)\]",
+        text,
+        re.IGNORECASE,
+    )
+    # Filter out very short noise matches (single words that are just labels like "1")
+    bracketed = [c.strip() for c in bracketed if len(c.strip()) > 3]
+
     if bracketed:
         narrative = re.sub(r"\[.*?\]", "", text).strip()
+        # Clean up leftover blank lines
+        narrative = re.sub(r"\n{3,}", "\n\n", narrative).strip()
+        print(f"[parse_response] bracket mode: {len(bracketed)} choices extracted")
         return narrative, bracketed
+
+    # ── 2. Numbered-list extraction ───────────────────────────────────────────
+    # Matches lines like: "1. text", "2) text", "Option 1: text"
+    numbered = re.findall(
+        r"^\s*(?:Option\s+)?(?:\d+)[.):\-]\s*(.+)$",
+        text,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    numbered = [c.strip() for c in numbered if len(c.strip()) > 3]
+
+    if numbered:
+        # Strip the numbered-list lines from the narrative
+        narrative = re.sub(
+            r"^\s*(?:Option\s+)?(?:\d+)[.):\-]\s*.+$", "", text, flags=re.MULTILINE
+        ).strip()
+        narrative = re.sub(r"\n{3,}", "\n\n", narrative).strip()
+        print(f"[parse_response] numbered-list mode: {len(numbered)} choices extracted")
+        return narrative, numbered
+
+    # ── 3. No choices found ───────────────────────────────────────────────────
+    print(f"[parse_response] no choices found — returning full text as narrative")
     return text.strip(), []

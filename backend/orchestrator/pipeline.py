@@ -5,8 +5,11 @@ orchestrator/pipeline.py — LangGraph-powered Story Weaver pipeline.
 from __future__ import annotations
 
 import asyncio
+import os
+import re
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Optional, TypedDict, Any
 
 from langgraph.graph import StateGraph, END
@@ -163,6 +166,11 @@ async def node_generate_media(state: PipelineState) -> dict:
     choices_raw = state["choices_raw"]
     voice = ss.config.voice
 
+    # Strip choice-question lines before TTS — the LLM sometimes appends
+    # "Where should Arlo go? / Should he..." directly into the narrative prose,
+    # which causes the narrator to read the option text aloud.
+    tts_narrative = _narrative_for_tts(narrative)
+
     # Collect character refs from session: protagonist first, then side characters.
     # Protagonist always goes first so the model prompt attribution is consistent.
     characters = sorted(
@@ -171,9 +179,9 @@ async def node_generate_media(state: PipelineState) -> dict:
     )
 
     # Create all tasks up front
-    # 1. Narration
+    # 1. Narration — use tts_narrative (choice-question lines stripped)
     narration_audio_task = asyncio.create_task(
-        generate_audio(narrative, voice=voice)
+        generate_audio(tts_narrative, voice=voice)
     )
     # 2. Main Illustration — pass character refs, not a raw b64 string
     main_image_task = asyncio.create_task(
@@ -185,23 +193,39 @@ async def node_generate_media(state: PipelineState) -> dict:
     choice_audio_tasks = []
     choice_image_tasks = []
 
+    print(
+        f"[pipeline] Generating media  job={ss.job_id}  session={ss.session_id}  step={ss.step_number}\n"
+        f"  narrative(120)    : {narrative[:120]!r}\n"
+        f"  tts_narrative(120): {tts_narrative[:120]!r}"
+    )
+
     # Fire all simultaneously
     await asyncio.gather(
         *([narration_audio_task, main_image_task] + choice_audio_tasks + choice_image_tasks),
         return_exceptions=True,
     )
 
-    def _safe(task: asyncio.Task, default: bytes = b"") -> bytes:
-        if task.cancelled(): return default
+    def _safe(task: asyncio.Task, label: str, default: bytes = b"") -> bytes:
+        if task.cancelled():
+            print(f"[pipeline] job={ss.job_id} {label} task was CANCELLED")
+            return default
         exc = task.exception()
         if exc:
-            print(f"[pipeline] Media task error: {exc}")
+            print(f"[pipeline] job={ss.job_id} {label} task raised: {type(exc).__name__}: {exc}")
             return default
-        return task.result()
+        result = task.result()
+        if not result:
+            print(f"[pipeline] job={ss.job_id} {label} returned EMPTY bytes — generation failed (see above logs)")
+        else:
+            print(f"[pipeline] job={ss.job_id} {label} OK  size={len(result)} bytes")
+        return result
+
+    audio_bytes = _safe(narration_audio_task, "AUDIO")
+    image_bytes = _safe(main_image_task, "IMAGE")
 
     return {
-        "narration_audio_bytes": _safe(narration_audio_task),
-        "main_image_bytes": _safe(main_image_task),
+        "narration_audio_bytes": audio_bytes,
+        "main_image_bytes": image_bytes,
         "choice_audio_bytes": [],
         "choice_image_bytes": [],
     }
@@ -228,11 +252,14 @@ async def node_assemble(state: PipelineState) -> dict:
 
     elapsed_ms = int((time.monotonic() - state["t_start"]) * 1000)
 
+    # Use the same stripped narrative that TTS used, so displayed text matches audio exactly.
+    display_text = _narrative_for_tts(state["narrative"])
+
     scene = SceneOutput(
         session_id=ss.session_id,
         step_number=ss.step_number,
         is_ending=is_ending,
-        story_text=state["narrative"],
+        story_text=display_text,
         narration_audio_b64=encode_b64(state["narration_audio_bytes"]),
         illustration_b64=encode_b64(state["main_image_bytes"]),
         choices=choices_out,
@@ -244,11 +271,31 @@ async def node_assemble(state: PipelineState) -> dict:
     ss.messages.append({"role": "assistant", "content": state["raw_text"]})
     ss.status = StoryStatus.COMPLETE
 
+    audio_bytes = state["narration_audio_bytes"]
+    image_bytes = state["main_image_bytes"]
+
     print(
-        f"[pipeline] DONE session={ss.session_id} step={ss.step_number} "
-        f"time={elapsed_ms}ms safety={'OK' if (not safety or safety.passed) else 'FLAGGED'} "
-        f"retries={state['safety_retry_count']}"
+        f"\n{'='*60}\n"
+        f"[pipeline] JOB DUMP  job={ss.job_id}  session={ss.session_id}  step={ss.step_number}\n"
+        f"  time        : {elapsed_ms}ms\n"
+        f"  safety      : {'OK' if (not safety or safety.passed) else 'FLAGGED'}  retries={state['safety_retry_count']}\n"
+        f"  display_text: {display_text[:300]!r}\n"
+        f"  audio_bytes : {len(audio_bytes)} bytes {'OK' if audio_bytes else 'EMPTY!'}\n"
+        f"  image_bytes : {len(image_bytes)} bytes {'OK' if image_bytes else 'EMPTY!'}\n"
+        f"  choices     : {[c.text for c in choices_out]}\n"
+        f"{'='*60}\n"
     )
+
+    # ── Write debug artefacts to disk (only when DEBUG=true) ─────────────────
+    if os.getenv("DEBUG", "").lower() == "true":
+        _write_debug_artefacts(
+            job_id=ss.job_id,
+            session_id=ss.session_id,
+            step=ss.step_number,
+            text=display_text,
+            audio_bytes=audio_bytes,
+            image_bytes=image_bytes,
+        )
 
     return {"scene_output": scene}
 
@@ -309,6 +356,101 @@ def _build_graph() -> StateGraph:
 
 
 _compiled_graph = _build_graph().compile()
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# Directory where debug artefacts (text / audio / image) are written.
+_DEBUG_OUTPUT_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "backend", "debug_output",
+)
+
+
+def _write_debug_artefacts(
+    *,
+    job_id: str,
+    session_id: str,
+    step: int,
+    text: str,
+    audio_bytes: bytes,
+    image_bytes: bytes,
+) -> None:
+    """
+    Write text / audio / image artefacts to backend/debug_output/.
+    File names: {timestamp}_{job_id}_step{step}.{ext}
+    """
+    try:
+        os.makedirs(_DEBUG_OUTPUT_DIR, exist_ok=True)
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        stem = f"{ts}_{job_id}_step{step}"
+
+        txt_path   = os.path.join(_DEBUG_OUTPUT_DIR, f"{stem}.txt")
+        audio_path = os.path.join(_DEBUG_OUTPUT_DIR, f"{stem}.wav")
+        image_path = os.path.join(_DEBUG_OUTPUT_DIR, f"{stem}.png")
+
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(f"job_id    : {job_id}\n")
+            f.write(f"session_id: {session_id}\n")
+            f.write(f"step      : {step}\n")
+            f.write(f"timestamp : {ts}\n")
+            f.write(f"\n{text}\n")
+
+        if audio_bytes:
+            with open(audio_path, "wb") as f:
+                f.write(audio_bytes)
+
+        if image_bytes:
+            with open(image_path, "wb") as f:
+                f.write(image_bytes)
+
+        print(
+            f"[pipeline] debug artefacts written → {stem}  "
+            f"txt={os.path.getsize(txt_path)}B  "
+            f"audio={len(audio_bytes)}B  "
+            f"image={len(image_bytes)}B"
+        )
+    except Exception as exc:
+        print(f"[pipeline] WARNING: failed to write debug artefacts: {exc}")
+
+
+# Patterns that signal the start of the "choice question" section in the narrative.
+# Everything from the first match onward is stripped before TTS so the narrator
+# only reads the story prose, not the choice options.
+_CHOICE_QUESTION_RE = re.compile(
+    r"(\n\s*\n"                               # blank line separator
+    r"(?:"
+    r"(?:where|what|which|how|who)\s+(?:does|should|will|would|can|do|did|is)\b"
+    r"|"
+    r"(?:should\s+(?:he|she|they|arlo)\b)"
+    r"|"
+    r"(?:or\s+(?:perhaps|maybe)\b)"
+    r"|"
+    r"\[choice"
+    r"))",
+    re.IGNORECASE,
+)
+
+
+def _narrative_for_tts(narrative: str) -> str:
+    """
+    Return only the story prose portion of the narrative, stripping any
+    choice-question lines that the LLM sometimes embeds at the end.
+
+    Example input:
+        "Arlo walked into the forest...  \\n\\nWhere should Arlo go next?\\nShould he..."
+    Example output:
+        "Arlo walked into the forest..."
+    """
+    m = _CHOICE_QUESTION_RE.search(narrative)
+    if m:
+        trimmed = narrative[: m.start()].strip()
+        if trimmed:
+            print(f"[pipeline] TTS: stripped {len(narrative) - len(trimmed)} chars of choice-question from narrative")
+            return trimmed
+    return narrative
 
 
 # ---------------------------------------------------------------------------
