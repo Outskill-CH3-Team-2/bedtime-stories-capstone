@@ -17,7 +17,7 @@ def _get_models() -> dict:
     with open(_CONFIG_DIR / "models.yaml") as f:
         return yaml.safe_load(f)
 
-def build_prompt(config: ChildConfig, messages: list[dict], step_number: int, story_idea: str, rag_context: str = None) -> list[dict]:
+def build_prompt(config: ChildConfig, messages: list[dict], step_number: int, story_idea: str = "", rag_context: str = None) -> list[dict]:
     prompts = _get_prompts()
     
     # Format personalization
@@ -33,7 +33,11 @@ def build_prompt(config: ChildConfig, messages: list[dict], step_number: int, st
         details=details
     )
 
-    # 2. Pacing / Ending Injection
+    # 2. RAG context injection
+    if rag_context:
+        system_text += "\n\n" + prompts["rag_injection"].format(rag_context=rag_context)
+
+    # 3. Pacing / Ending Injection
     if step_number >= 8:
         system_text += "\n\n" + prompts["forced_ending_instruction"].format(name=config.child_name)
     elif step_number >= 6:
@@ -42,7 +46,7 @@ def build_prompt(config: ChildConfig, messages: list[dict], step_number: int, st
     msgs = [{"role": "system", "content": system_text}]
     msgs.extend(messages)
 
-    # 3. Inject the "Story Idea" if this is the very first turn (no history)
+    # 4. Inject the "Story Idea" if this is the very first turn (no history)
     if not messages:
         msgs.append({
             "role": "user", 

@@ -60,3 +60,13 @@ pip-delete-this-directory.txt
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# --- Claude Code ---
+CLAUDE.md
+.claude/
+
+# --- Dev log (privato) ---
+DEVLOG.md
+
+# --- Documenti privati ---
+StoryWeaver_PRD_v2.docx
