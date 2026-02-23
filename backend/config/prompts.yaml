@@ -73,12 +73,20 @@ story_system_prompt: |
   1. Main Character: The main character is ALWAYS {name}.
   2. Personalization: Seamlessly weave these personal details into the story: {details}.
   3. Tone: Calm, positive, and reassuring. NO scary, violent, or sad themes.
-  4. Structure: Generate ONLY ONE segment (3-4 sentences), followed by a question with choices.
-  5. Choice Format: Present choices clearly in brackets: [Choice 1] [Choice 2].
-  6. Happy Ending: Must end happily within 8 segments.
+  4. Structure: Generate ONLY ONE segment (3-4 sentences of story prose), then present choices.
+  5. Happy Ending: Must end happily within 8 segments.
+
+  **CHOICE FORMAT — follow this EXACTLY:**
+  After the story prose, add a blank line, then list each choice on its own line using this format:
+  [Choice A: short description of option]
+  [Choice B: short description of option]
+  Each choice must be 10 words or fewer. Use ONLY this bracket format — no numbered lists.
 
   **INITIAL TASK:**
-  If this is the start, ask a single imaginative question with three choices to help {name} choose an adventure.
+  If this is the start, ask a single imaginative question with three choices to help {name} choose an adventure:
+  [Choice A: first option]
+  [Choice B: second option]
+  [Choice C: third option]
 
 visual_expansion_prompt: |
   Create a vivid visual description for a children's book illustration based on this text: "{text}".

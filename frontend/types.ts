@@ -14,6 +14,12 @@ export interface Scene {
   session_id: string;
 }
 
+/** Tracks one pre-generated branch: the choice that was sent and the resulting job. */
+export interface PrefiredJob {
+  choiceText: string;
+  jobId: string;
+}
+
 export interface StoryState {
   sessionId: string | null;
   currentScene: Scene | null;
