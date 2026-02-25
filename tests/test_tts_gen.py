@@ -1,9 +1,11 @@
+import os
 import pytest
 import asyncio
 import base64
 import wave
 import io
 from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime
 
 # to run the test: pytest tests/test_tts_gen.py -v -m integration
 # or pytest tests/test_tts_gen.py -v -m "not integration"
@@ -156,3 +158,52 @@ async def test_generate_audio_e2e_integration():
         
     except Exception as e:
         pytest.fail(f"Integration test failed: {e}")
+        
+# -----------------------------------------------------------------------------
+# Expressive Audio Tests (Saves files for listening)
+# -----------------------------------------------------------------------------
+
+@pytest.mark.integration
+@pytest.mark.parametrize("emotion, text_prompt", [
+    ("neutral", "This is a standard reading test to establish a baseline."),
+    ("happy_giggle", "Oh my gosh! [giggles] I can't believe that actually worked!"),
+    ("sad_sigh", "[sighs] It has been such a long, hard day... I just want to rest."),
+    ("whisper", "[whispering] Shhh. Keep your voice down. They might hear us."),
+    ("excited", "Hurry! Look at that! It's amazing! [gasps]"),
+])
+@pytest.mark.asyncio
+async def test_generate_expressive_samples(emotion, text_prompt):
+    """
+    Generates audio with specific emotional cues and saves them to 'tests/artifacts'.
+    Open the .wav files to hear if the model obeyed the stage directions.
+    """
+    # 1. Create artifacts directory if it doesn't exist
+    output_dir = os.path.join(os.path.dirname(__file__), "artifacts")
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"\n[Audio] Generating '{emotion}' sample...")
+
+    # 2. Call your real pipeline (Make sure to use the patch fix from before if needed, 
+    #    but since this is integration, we want the REAL generate_audio)
+    try:
+        from backend.pipelines.tts import generate_audio
+    except ImportError:
+        from pipelines.tts import generate_audio
+
+    # 3. Generate Audio
+    audio_bytes = await generate_audio(text_prompt)
+    
+    # 4. Save to file
+    timestamp = datetime.now().strftime("%H%M%S")
+    filename = f"tts_{emotion}_{timestamp}.wav"
+    filepath = os.path.join(output_dir, filename)
+
+    with open(filepath, "wb") as f:
+        f.write(audio_bytes)
+
+    # 5. Verify and Log
+    assert len(audio_bytes) > 0, "Audio should not be empty"
+    assert audio_bytes.startswith(b"RIFF"), "Should be a valid WAV file"
+    
+    print(f"   -> Saved to: {filepath}")
+    print(f"   -> Size: {len(audio_bytes)/1024:.1f} KB")        
