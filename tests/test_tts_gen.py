@@ -206,4 +206,42 @@ async def test_generate_expressive_samples(emotion, text_prompt):
     assert audio_bytes.startswith(b"RIFF"), "Should be a valid WAV file"
     
     print(f"   -> Saved to: {filepath}")
-    print(f"   -> Size: {len(audio_bytes)/1024:.1f} KB")        
+    print(f"   -> Size: {len(audio_bytes)/1024:.1f} KB")    
+    
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_auto_enrichment():
+    """
+    Test that plain text gets automatically expanded with stage directions 
+    and saves the audio so you can hear the difference.
+    """
+    # 1. Setup paths
+    output_dir = os.path.join(os.path.dirname(__file__), "artifacts")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 2. Input: A sentence that begs for emotion but has none written
+    plain_text = "I am so scared of the dark, please don't leave me alone here."
+    
+    print(f"\n[Audio] Testing Auto-Enrichment on: '{plain_text}'")
+
+    # 3. Call with expressive=True to trigger the "Director" LLM
+    #    (Make sure you have the patch/import logic from before if needed, 
+    #     but for integration tests, direct import is best)
+ 
+    from backend.pipelines.tts import generate_audio
+
+
+    audio_bytes = await generate_audio(plain_text, expressive=True)
+    
+    # 4. Save to file
+    timestamp = datetime.now().strftime("%H%M%S")
+    filename = f"tts_auto_enriched_{timestamp}.wav"
+    filepath = os.path.join(output_dir, filename)
+
+    with open(filepath, "wb") as f:
+        f.write(audio_bytes)
+
+    # 5. Verification
+    assert len(audio_bytes) > 0
+    print(f"   -> Saved to: {filepath}")
+    print(f"   -> Listen to hear if it added [trembling] or [whispering]!")

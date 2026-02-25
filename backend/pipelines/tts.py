@@ -1,14 +1,7 @@
 """
 pipelines/tts.py — Audio generation using GPT-4o Audio Preview.
-Implements the specific streaming + PCM16 logic from test_audio_v03.py.
-
-Error handling
---------------
-  - APIStatusError 429 / 5xx  → retryable, exponential backoff
-  - APIStatusError 400 / 401  → fatal, logged and empty bytes returned
-  - APITimeoutError / APIConnectionError → retryable
-  - Stream yields no audio data → logged + retried (model sometimes returns
-    only text even when audio is requested)
+Includes an 'Expressive' mode that uses a cheaper LLM to add stage directions
+before generation.
 """
 
 from __future__ import annotations
@@ -16,216 +9,171 @@ from __future__ import annotations
 import asyncio
 import base64
 import io
-import json
-import traceback
 import wave
 import yaml
 from pathlib import Path
 
-from openai import APIStatusError, APITimeoutError, APIConnectionError
-
-from backend.pipelines.provider import get_client
+# We import the shared client provider
+# Ensure this path matches your project structure (backend.pipelines.provider)
+try:
+    from backend.pipelines.provider import get_client
+except ImportError:
+    from pipelines.provider import get_client
 
 _CONFIG_DIR = Path(__file__).parent.parent / "config"
 
+# --- Configuration ---
 _MAX_RETRIES = 3
-_RETRY_BASE_DELAY = 2.0   # seconds — doubles each attempt
-_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
-
+_RETRY_BASE_DELAY = 2.0
+_DIRECTOR_MODEL = "openai/gpt-4o-mini"   # Cheap, fast model for adding stage directions
+_AUDIO_MODEL = "openai/gpt-4o-audio-preview"
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_models() -> dict:
-    with open(_CONFIG_DIR / "models.yaml") as f:
-        return yaml.safe_load(f)
-
-
 def _create_wav_container(pcm_data: bytes, sample_rate: int = 24000) -> bytes:
     """
-    Wraps raw PCM16 data in a WAV container so browsers/players can handle it.
-    Parameters match test_audio_v03.py: Mono (1), 2 bytes (16-bit), 24 kHz.
+    Wraps raw PCM16 data in a WAV container so it can be played by standard players.
     """
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as wav_file:
-        wav_file.setparams((1, 2, sample_rate, 0, "NONE", "not compressed"))
-        wav_file.writeframes(pcm_data)
-    return buffer.getvalue()
+    with io.BytesIO() as wav_buffer:
+        with wave.open(wav_buffer, 'wb') as wav_file:
+            # 1 channel (mono), 2 bytes (16-bit), sample_rate
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(pcm_data)
+        return wav_buffer.getvalue()
 
+def _log_api_error(exc: Exception, attempt: int, model_name: str) -> bool:
+    """Logs errors and returns True if retryable."""
+    print(f"[tts] Error on attempt {attempt} ({model_name}): {exc}")
+    return True  # Simplified: assume most network/API errors are worth 1 retry
 
-def _log_api_error(exc: Exception, attempt: int, model: str) -> bool:
-    """Log the error and return True if it is retryable."""
-    if isinstance(exc, APIStatusError):
-        status = exc.status_code
-        try:
-            body = exc.response.json()
-            provider_msg = (
-                body.get("error", {}).get("message")
-                or body.get("message")
-                or json.dumps(body)[:300]
-            )
-        except Exception:
-            provider_msg = str(getattr(exc, "message", exc))[:300]
+# ---------------------------------------------------------------------------
+# Core Functions
+# ---------------------------------------------------------------------------
 
-        retryable = status in _RETRYABLE_STATUS
-        label = "RATE_LIMIT" if status == 429 else ("SERVER_ERROR" if status >= 500 else "CLIENT_ERROR")
-        print(
-            f"[tts] {label} (attempt {attempt}/{_MAX_RETRIES})\n"
-            f"  model    : {model}\n"
-            f"  status   : {status}\n"
-            f"  message  : {provider_msg}\n"
-            f"  retryable: {retryable}"
-        )
-        return retryable
-
-    if isinstance(exc, (APITimeoutError, APIConnectionError)):
-        print(
-            f"[tts] NETWORK_ERROR (attempt {attempt}/{_MAX_RETRIES})\n"
-            f"  type     : {type(exc).__name__}\n"
-            f"  detail   : {exc}\n"
-            f"  retryable: True"
-        )
-        return True
-
-    print(
-        f"[tts] UNEXPECTED_ERROR (attempt {attempt}/{_MAX_RETRIES})\n"
-        f"  type     : {type(exc).__name__}\n"
-        f"  detail   : {exc}\n"
-        f"  retryable: False"
+async def enrich_text_for_audio(text: str) -> str:
+    """
+    Uses a cheap, fast LLM to add stage directions and prosody cues to the text.
+    Example input:  "The dragon woke up."
+    Example output: "[low growl] The dragon woke up... [yawns loudly]"
+    """
+    client = get_client()
+    
+    system_prompt = (
+        "You are an expert script doctor for audiobooks. "
+        "Your task is to rewrite the user's input slightly to optimize it for "
+        "dramatic text-to-speech performance.\n"
+        "Rules:\n"
+        "1. Insert stage directions in brackets, e.g., [sighs], [whispers], [laughs], [gasps].\n"
+        "2. Use punctuation (ellipses '...', italics via caps) to guide pacing.\n"
+        "3. DO NOT change the core meaning or words significantly, just enhance the delivery.\n"
+        "4. Keep it subtle; don't overdo it."
     )
-    traceback.print_exc()
-    return False
+
+    try:
+        response = await client.chat.completions.create(
+            model=_DIRECTOR_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": text}
+            ],
+            temperature=0.7,
+            max_tokens=1000  # Keep it short, usually input length + 20%
+        )
+        enriched_text = response.choices[0].message.content
+        print(f"[tts] Enriched Text: {enriched_text}")
+        return enriched_text
+    except Exception as e:
+        print(f"[tts] Warning: Text enrichment failed ({e}). Using raw text.")
+        return text
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-async def generate_audio(text: str, voice: str = "onyx") -> bytes:
+async def generate_audio(
+    text: str, 
+    voice: str = "onyx", 
+    expressive: bool = True
+) -> bytes:
     """
-    Generate narration audio for the given text.
-
-    Streams PCM16 chunks from gpt-4o-audio-preview, accumulates them, and
-    wraps the result in a WAV container.
-
-    Retries up to _MAX_RETRIES times on transient errors or when the stream
-    yields no audio data at all (model text-only fallback).
-
+    Generates audio from text.
+    
+    Args:
+        text: The text to read.
+        voice: The OpenAI voice ID (alloy, echo, fable, onyx, nova, shimmer).
+        expressive: If True, first enriches text with stage directions using a cheap LLM.
+    
     Returns:
-        WAV bytes, or b"" on failure.
+        WAV-formatted audio bytes.
     """
-    if not text or not text.strip():
-        print("[tts] Empty text — skipping audio generation.")
-        return b""
-
-    models = _get_models()
-    model_name = models["tts"]["model"]
-    sample_rate = models["tts"].get("sample_rate", 24000)
-
-    print(
-        f"[tts] INPUT TEXT ({len(text)} chars):\n"
-        f"  >>> {text!r}"
-    )
-
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "You are a professional audiobook narrator for children's bedtime stories. "
-                "Read the user's message aloud exactly as written — word for word. "
-                "Do NOT add any introduction, greeting, acknowledgement, or commentary. "
-                "Begin speaking the text immediately."
-            ),
-        },
-        {
-            "role": "user",
-            "content": f"Please narrate this text: {text}",
-        },
-    ]
-
     client = get_client()
 
+    # 1. Enrich text if requested (The "Director" Step)
+    final_text = text
+    if expressive:
+        print(f"[tts] enriching text for expressive audio...")
+        final_text = await enrich_text_for_audio(text)
+
+    # 2. Define System Prompt based on mode (The "Actor" Step)
+    if expressive:
+        sys_msg = (
+            "You are a skilled voice actor performing a bedtime story. "
+            "Follow all stage directions (like [laughs], [whispers], [sighs]) accurately. "
+            "Use a warm, engaging, and expressive tone appropriate for children."
+        )
+    else:
+        sys_msg = (
+            "You are a professional narrator. Read the text exactly as written. "
+            "Do not add fillers or non-verbal sounds unless explicitly written."
+        )
+
+    # 3. Call Audio Model with Retry Logic
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
-            print(f"[tts] Attempt {attempt}/{_MAX_RETRIES}  model={model_name}  voice={voice}")
-
+            print(f"[tts] Generating audio (attempt {attempt})...")
+            
             stream = await client.chat.completions.create(
-                model=model_name,
+                model=_AUDIO_MODEL,
                 modalities=["text", "audio"],
                 audio={"voice": voice, "format": "pcm16"},
-                messages=messages,
-                stream=True,
+                messages=[
+                    {"role": "system", "content": sys_msg},
+                    {"role": "user", "content": f"Narrate this: {final_text}"}
+                ],
+                stream=True
             )
 
             full_audio_b64 = ""
-            chunk_count = 0
-            audio_chunk_count = 0
-            finish_reason = None
-
+            
             async for chunk in stream:
-                chunk_count += 1
-                if not chunk.choices:
+                if not chunk.choices: 
                     continue
                 delta = chunk.choices[0].delta
-                fr = chunk.choices[0].finish_reason
-                if fr:
-                    finish_reason = fr
-
-                # Extract audio data — delta.audio may be a dict or object
-                audio_obj = getattr(delta, "audio", None)
-                if audio_obj:
-                    # SDK may give us a dict or a typed object
-                    data = (
-                        audio_obj.get("data")
-                        if isinstance(audio_obj, dict)
-                        else getattr(audio_obj, "data", None)
-                    )
-                    if data:
-                        full_audio_b64 += data
-                        audio_chunk_count += 1
-
-            print(
-                f"[tts] Stream finished  chunks={chunk_count}  "
-                f"audio_chunks={audio_chunk_count}  finish={finish_reason!r}  "
-                f"b64_len={len(full_audio_b64)}"
-            )
+                
+                # Accumulate audio data
+                if hasattr(delta, 'audio') and delta.audio and 'data' in delta.audio:
+                    full_audio_b64 += delta.audio['data']
 
             if not full_audio_b64:
-                print(
-                    f"[tts] NO_AUDIO_DATA (attempt {attempt}/{_MAX_RETRIES}) — "
-                    f"stream yielded {chunk_count} chunks but no audio data.  "
-                    f"finish_reason={finish_reason!r}\n"
-                    f"  → Model may have returned text-only; retrying."
-                )
-                if attempt < _MAX_RETRIES:
-                    delay = _RETRY_BASE_DELAY * attempt
-                    print(f"[tts] Retrying in {delay:.1f}s...")
-                    await asyncio.sleep(delay)
+                print(f"[tts] Warning: Stream finished but no audio data found (attempt {attempt}).")
+                # Basic backoff
+                await asyncio.sleep(_RETRY_BASE_DELAY * attempt)
                 continue
 
+            # Decode and Wrap
             pcm_bytes = base64.b64decode(full_audio_b64)
-            wav_bytes = _create_wav_container(pcm_bytes, sample_rate)
-            print(
-                f"[tts] Success  pcm={len(pcm_bytes)} bytes  "
-                f"wav={len(wav_bytes)} bytes  attempt={attempt}"
-            )
+            wav_bytes = _create_wav_container(pcm_bytes)
+            
+            print(f"[tts] Success. Generated {len(wav_bytes)} bytes of audio.")
             return wav_bytes
 
-        except Exception as exc:
-            retryable = _log_api_error(exc, attempt, model_name)
-            if not retryable or attempt == _MAX_RETRIES:
-                print(f"[tts] Giving up after attempt {attempt}.")
+        except Exception as e:
+            _log_api_error(e, attempt, _AUDIO_MODEL)
+            if attempt < _MAX_RETRIES:
+                await asyncio.sleep(_RETRY_BASE_DELAY * attempt)
+            else:
+                print("[tts] All attempts exhausted.")
                 return b""
-            delay = _RETRY_BASE_DELAY * attempt
-            print(f"[tts] Retrying in {delay:.1f}s...")
-            await asyncio.sleep(delay)
 
-    print(f"[tts] All {_MAX_RETRIES} attempts exhausted — returning empty.")
     return b""
-
-
-def encode_b64(data: bytes) -> str:
-    if not data:
-        return ""
-    return base64.b64encode(data).decode("utf-8")
