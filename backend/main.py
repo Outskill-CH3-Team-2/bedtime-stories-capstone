@@ -9,11 +9,28 @@ from backend.contracts import (
     StoryState, StoryStatus,
     GenerateRequest, GenerateResponse,
     CharacterRef, AddCharacterRequest,
+    ChildConfig, SceneOutput, Choice,
 )
 from backend.orchestrator.pipeline import process_scene
 from backend.session_store import session_store, job_store
 from backend.safety.filters import sanitize_input
 from utils.download_assets import download_if_missing
+
+# ---------------------------------------------------------------------------
+# Mock mode — set MOCK_PIPELINES=true to skip real AI calls (useful for tests)
+# ---------------------------------------------------------------------------
+
+MOCK_PIPELINES = os.getenv("MOCK_PIPELINES", "false").lower() == "true"
+
+# Maps session_id → latest job_id so callers can poll status by session_id
+_session_to_job: dict[str, str] = {}
+
+
+class StoryChooseRequest(_BaseModel):
+    session_id: str
+    choice_id: str = ""
+    choice_text: str
+
 
 # Resolve paths relative to project root (one level above this file's package)
 _PROJECT_ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -102,8 +119,120 @@ async def run_pipeline_task(job_id: str, session_id: str, choice_text: str = "")
 
 
 # ---------------------------------------------------------------------------
+# Mock pipeline (used when MOCK_PIPELINES=true)
+# ---------------------------------------------------------------------------
+
+async def _mock_pipeline_task(job_id: str, session_id: str) -> None:
+    """Return synthetic scene data without calling any AI APIs."""
+    import asyncio
+    await asyncio.sleep(0.1)
+
+    job = job_store.get(job_id)
+    state = session_store.get(session_id)
+    if not job or not state:
+        return
+
+    scene = SceneOutput(
+        session_id=session_id,
+        step_number=state.step_number,
+        is_ending=False,
+        story_text=f"{state.config.child_name} went on a magical adventure!",
+        choices=[
+            Choice(id="c1_mock", text="Follow the glowing path"),
+            Choice(id="c2_mock", text="Stay and explore here"),
+        ],
+    )
+    job.status = StoryStatus.COMPLETE
+    job.result = scene
+    job_store.update(job)
+    state.status = StoryStatus.COMPLETE
+    state.messages.append({"role": "assistant", "content": scene.story_text})
+    session_store.set(session_id, state)
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "service": "Story Weaver API", "version": "1.0", "mock_mode": MOCK_PIPELINES}
+
+
+@app.post("/story/start")
+async def story_start(config: ChildConfig, background_tasks: BackgroundTasks):
+    """Simple story-start endpoint: accepts ChildConfig, returns session_id + job_id."""
+    safe_config = sanitize_input(config)
+    state = StoryState(config=safe_config)
+    session_store.set(state.session_id, state)
+
+    job = job_store.create(state.session_id)
+    _session_to_job[state.session_id] = job.job_id
+
+    if MOCK_PIPELINES:
+        background_tasks.add_task(_mock_pipeline_task, job.job_id, state.session_id)
+    else:
+        background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, "")
+
+    return {"session_id": state.session_id, "job_id": job.job_id, "step_number": state.step_number}
+
+
+@app.post("/story/choose")
+async def story_choose(request: StoryChooseRequest, background_tasks: BackgroundTasks):
+    """Advance the story by committing a choice and firing the next generation."""
+    state = session_store.get(request.session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    state.step_number += 1
+    state.messages.append({"role": "user", "content": request.choice_text})
+    session_store.set(request.session_id, state)
+
+    job = job_store.create(state.session_id)
+    _session_to_job[state.session_id] = job.job_id
+
+    if MOCK_PIPELINES:
+        background_tasks.add_task(_mock_pipeline_task, job.job_id, request.session_id)
+    else:
+        background_tasks.add_task(run_pipeline_task, job.job_id, request.session_id, request.choice_text)
+
+    return {"step_number": state.step_number, "session_id": request.session_id, "job_id": job.job_id}
+
+
+# ---------------------------------------------------------------------------
+# Legacy endpoints (/generate/*)
+# ---------------------------------------------------------------------------
+
+@app.post("/generate/start")
+async def legacy_generate_start(background_tasks: BackgroundTasks):
+    """Legacy stub: creates a default session and fires a generation job."""
+    config = ChildConfig(child_name="Friend", child_age=5)
+    state = StoryState(config=config)
+    session_store.set(state.session_id, state)
+
+    job = job_store.create(state.session_id)
+    _session_to_job[state.session_id] = job.job_id
+
+    if MOCK_PIPELINES:
+        background_tasks.add_task(_mock_pipeline_task, job.job_id, state.session_id)
+    else:
+        background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, "")
+
+    return {"session_id": state.session_id, "job_id": job.job_id}
+
+
+@app.get("/generate/status/{id}")
+async def legacy_get_status(id: str):
+    """Legacy status endpoint: accepts either job_id or session_id."""
+    job = job_store.get(id)
+    if not job:
+        job_id = _session_to_job.get(id)
+        if job_id:
+            job = job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"status": job.status, "job_id": job.job_id}
+
 
 @app.post("/story/generate", response_model=GenerateResponse)
 async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
@@ -202,17 +331,27 @@ async def add_character(request: AddCharacterRequest):
     return {"status": "ok", "character": char.name}
 
 
-@app.get("/story/status/{job_id}")
-async def get_status(job_id: str):
-    job = job_store.get(job_id)
+def _resolve_job(id: str):
+    """Look up a job by job_id, or fall back to the latest job for a session_id."""
+    job = job_store.get(id)
+    if not job:
+        job_id = _session_to_job.get(id)
+        if job_id:
+            job = job_store.get(job_id)
+    return job
+
+
+@app.get("/story/status/{id}")
+async def get_status(id: str):
+    job = _resolve_job(id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return {"status": job.status, "job_id": job_id, "session_id": job.session_id}
+    return {"status": job.status, "job_id": job.job_id, "session_id": job.session_id}
 
 
-@app.get("/story/result/{job_id}")
-async def get_result(job_id: str):
-    job = job_store.get(job_id)
+@app.get("/story/result/{id}")
+async def get_result(id: str):
+    job = _resolve_job(id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
