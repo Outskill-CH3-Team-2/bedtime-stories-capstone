@@ -1,0 +1,158 @@
+import pytest
+import asyncio
+import base64
+import wave
+import io
+from unittest.mock import AsyncMock, MagicMock, patch
+
+# to run the test: pytest tests/test_tts_gen.py -v -m integration
+# or pytest tests/test_tts_gen.py -v -m "not integration"
+# or pytest tests/test_tts_gen.py -v
+# Adjust the import based on your actual function name in pipelines/tts.py
+# Assuming the main function is named 'generate_audio' or similar based on the context.
+# If your function is named differently (e.g. 'generate_speech'), please update this import.
+from backend.pipelines.tts import generate_audio, _create_wav_container
+
+# -----------------------------------------------------------------------------
+# Fixtures & Helpers
+# -----------------------------------------------------------------------------
+
+@pytest.fixture
+def mock_openai_client():
+    """
+    Creates a mock AsyncOpenAI client with a mocked chat.completions.create method.
+    """
+    mock_client = AsyncMock()
+    # Ensure the create method is an AsyncMock so we can await it
+    mock_client.chat.completions.create = AsyncMock()
+    return mock_client
+
+def create_mock_chunk(audio_data_b64: str):
+    """Helper to create a mock OpenAI API chunk object structure."""
+    chunk = MagicMock()
+    choice = MagicMock()
+    choice.delta.audio = {'data': audio_data_b64}
+    chunk.choices = [choice]
+    return chunk
+
+def is_valid_wav(audio_bytes: bytes) -> bool:
+    """Checks if bytes start with RIFF and WAVE headers."""
+    if len(audio_bytes) < 44:
+        return False
+    try:
+        with io.BytesIO(audio_bytes) as f:
+            with wave.open(f, 'rb') as wav_file:
+                return wav_file.getnchannels() > 0
+    except wave.Error:
+        return False
+    except Exception:
+        return False
+
+# -----------------------------------------------------------------------------
+# Unit Tests (Mocked)
+# -----------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_generate_audio_success(mock_openai_client):
+    """
+    Test successful audio generation where the API returns valid base64 PCM chunks.
+    We mock the provider.get_client to return our mock_openai_client.
+    """
+    # 1. Prepare Mock Data
+    # "UklGRg==" is "RIFF" in base64, just some dummy data to simulate PCM
+    dummy_pcm_b64 = base64.b64encode(b"\x00\x00\x00\x00").decode("utf-8")
+    
+    # Setup the mock stream to yield chunks
+    mock_stream = AsyncMock()
+    mock_stream.__aiter__.return_value = [
+        create_mock_chunk(dummy_pcm_b64),
+        create_mock_chunk(dummy_pcm_b64)
+    ]
+    mock_openai_client.chat.completions.create.return_value = mock_stream
+
+    # 2. Patch the get_client to return our mock
+    with patch("backend.pipelines.tts.get_client", return_value=mock_openai_client):
+        
+        # 3. Call the function under test
+        input_text = "Hello world"
+        audio_bytes = await generate_audio(input_text)
+
+        # 4. Assertions
+        assert audio_bytes is not None
+        assert len(audio_bytes) > 0
+        # Check if it has a WAV header (RIFF...)
+        assert audio_bytes.startswith(b"RIFF") 
+        assert b"WAVE" in audio_bytes[:16]
+        
+        # Verify OpenAI was called correctly
+        mock_openai_client.chat.completions.create.assert_awaited_once()
+        call_args = mock_openai_client.chat.completions.create.await_args[1]
+        assert call_args["model"] == "openai/gpt-4o-audio-preview"
+        assert "narrate this text: Hello world" in call_args["messages"][1]["content"]
+
+@pytest.mark.asyncio
+async def test_generate_audio_handles_empty_stream(mock_openai_client):
+    """
+    Test behavior when the API returns a stream with no audio data (empty chunks).
+    Should handle gracefully (likely return empty bytes or raise specific error).
+    """
+    mock_stream = AsyncMock()
+    mock_stream.__aiter__.return_value = [] # No chunks
+    mock_openai_client.chat.completions.create.return_value = mock_stream
+
+    with patch("backend.pipelines.tts.get_client", return_value=mock_openai_client):
+        # We expect it might return empty bytes or print an error and return b"" 
+        # based on the tts.py snippet provided (retry logic).
+        # To speed up test, we might want to mock the sleep or max_retries, 
+        # but here we assume it eventually returns empty bytes.
+        with patch("asyncio.sleep", return_value=None): # Skip sleep delays
+            audio_bytes = await generate_audio("Text causing empty response")
+            
+            # Implementation specific: typically returns empty bytes on total failure
+            assert audio_bytes == b""
+
+@pytest.mark.asyncio
+async def test_wav_container_creation():
+    """
+    Unit test strictly for the helper function _create_wav_container 
+    to ensure it writes valid headers.
+    """
+    # 1 second of silence at 24kHz (2 bytes per sample * 24000 samples)
+    dummy_pcm = b'\x00\x00' * 24000 
+    
+    wav_bytes = _create_wav_container(dummy_pcm, sample_rate=24000)
+    
+    assert len(wav_bytes) > len(dummy_pcm) # Header adds size
+    
+    # Read back with standard library to verify validity
+    with io.BytesIO(wav_bytes) as f:
+        with wave.open(f, 'rb') as wav:
+            assert wav.getnchannels() == 1
+            assert wav.getsampwidth() == 2
+            assert wav.getframerate() == 24000
+            assert wav.getnframes() == 24000
+
+# -----------------------------------------------------------------------------
+# Integration Test (Requires API Key)
+# -----------------------------------------------------------------------------
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_generate_audio_e2e_integration():
+    """
+    REAL API CALL.
+    Run this only when explicitly requested to verify integration with OpenRouter/OpenAI.
+    Usage: pytest -m integration
+    """
+    input_text = "This is a brief integration test."
+    
+    # This will use the real get_client and real environment variables
+    try:
+        audio_bytes = await generate_audio(input_text)
+        
+        assert len(audio_bytes) > 1000 # Expecting significant data
+        assert is_valid_wav(audio_bytes)
+        print(f"Integration success: Generated {len(audio_bytes)} bytes.")
+        
+    except Exception as e:
+        pytest.fail(f"Integration test failed: {e}")
