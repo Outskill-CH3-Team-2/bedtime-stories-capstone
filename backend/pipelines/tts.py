@@ -1,6 +1,6 @@
 """
-pipelines/tts.py — Audio generation using GPT-4o Audio Preview.
-Configuration (models & prompts) is loaded from YAML files to allow easy tuning.
+pipelines/tts.py — Expressive Audio Generation
+Uses a 'Director' LLM to add stage directions, then an 'Actor' LLM to perform them.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import wave
 import yaml
 from pathlib import Path
 
-# Import the shared client provider
+# Import your shared client provider
 try:
     from backend.pipelines.provider import get_client
 except ImportError:
@@ -30,8 +30,6 @@ def _load_config(filename: str) -> dict:
     """Loads a YAML configuration file from the config directory."""
     path = _CONFIG_DIR / filename
     if not path.exists():
-        # Fallback for tests running in isolation where path might differ
-        # or if the file is missing
         print(f"[tts] Warning: Config file {filename} not found at {path}")
         return {}
         
@@ -42,7 +40,6 @@ def _create_wav_container(pcm_data: bytes, sample_rate: int = 24000) -> bytes:
     """Wraps raw PCM16 data in a WAV container."""
     with io.BytesIO() as wav_buffer:
         with wave.open(wav_buffer, 'wb') as wav_file:
-            # 1 channel (mono), 2 bytes (16-bit), sample_rate
             wav_file.setnchannels(1)
             wav_file.setsampwidth(2)
             wav_file.setframerate(sample_rate)
@@ -50,30 +47,33 @@ def _create_wav_container(pcm_data: bytes, sample_rate: int = 24000) -> bytes:
         return wav_buffer.getvalue()
 
 def _log_api_error(exc: Exception, attempt: int, model_name: str) -> bool:
-    """Logs errors and returns True if retryable."""
     print(f"[tts] Error on attempt {attempt} ({model_name}): {exc}")
     return True
 
+def encode_b64(data: bytes) -> str:
+    """Helper to convert bytes to a base64 string."""
+    return base64.b64encode(data).decode("utf-8")
+
 # ---------------------------------------------------------------------------
-# Core Functions
+# Core Logic
 # ---------------------------------------------------------------------------
 
 async def enrich_text_for_audio(text: str) -> str:
     """
-    Uses the 'Director' model (configured in models.yaml) to add stage directions.
+    Uses the 'Director' model to add [stage directions] and [sfx cues] to plain text.
     """
     client = get_client()
-    
-    # Load config
     models_cfg = _load_config("models.yaml")
     prompts_cfg = _load_config("prompts.yaml")
 
-    # Safe access to config keys with defaults
     director_model = models_cfg.get("tts", {}).get("director", "openai/gpt-4o-mini")
-    system_prompt = prompts_cfg.get("tts", {}).get(
-        "enrichment_system", 
-        "Add stage directions like [sighs] to the text."
+    
+    # Default prompt fallback if yaml is missing
+    default_prompt = (
+        "Rewrite the text for a dramatic reading. "
+        "Add stage directions in brackets like [whispers] or [laughs]."
     )
+    system_prompt = prompts_cfg.get("tts", {}).get("enrichment_system", default_prompt)
 
     try:
         response = await client.chat.completions.create(
@@ -89,9 +89,8 @@ async def enrich_text_for_audio(text: str) -> str:
         print(f"[tts] Enriched Text: {enriched_text}")
         return enriched_text
     except Exception as e:
-        print(f"[tts] Warning: Text enrichment failed ({e}). Using raw text.")
+        print(f"[tts] Warning: Enrichment failed ({e}). Using raw text.")
         return text
-
 
 async def generate_audio(
     text: str, 
@@ -99,27 +98,26 @@ async def generate_audio(
     expressive: bool = True
 ) -> bytes:
     """
-    Generates audio from text using the configured Audio model.
+    Generates audio.
+    If expressive=True, it first 'directs' the script, then 'acts' it out.
     """
     client = get_client()
-    
-    # Load config
     models_cfg = _load_config("models.yaml")
     prompts_cfg = _load_config("prompts.yaml")
     
     audio_model = models_cfg.get("tts", {}).get("audio_preview", "openai/gpt-4o-audio-preview")
 
-    # 1. Enrich text if requested
+    # 1. THE DIRECTOR STEP (Enrichment)
     final_text = text
     if expressive:
-        print(f"[tts] enriching text using director model...")
+        print(f"[tts] Director is analyzing script...")
         final_text = await enrich_text_for_audio(text)
 
-    # 2. Select System Prompt
+    # 2. THE ACTOR STEP (System Prompt Selection)
     if expressive:
         sys_msg = prompts_cfg.get("tts", {}).get(
             "actor_system", 
-            "You are a skilled voice actor. Follow stage directions."
+            "You are a voice actor. Perform the text and mimic sounds in brackets."
         )
     else:
         sys_msg = prompts_cfg.get("tts", {}).get(
@@ -127,7 +125,7 @@ async def generate_audio(
             "Read the text exactly as written."
         )
 
-    # 3. Call Audio Model with Retry Logic
+    # 3. GENERATION LOOP
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             print(f"[tts] Generating audio (attempt {attempt})...")
@@ -138,7 +136,7 @@ async def generate_audio(
                 audio={"voice": voice, "format": "pcm16"},
                 messages=[
                     {"role": "system", "content": sys_msg},
-                    {"role": "user", "content": f"Narrate this: {final_text}"}
+                    {"role": "user", "content": f"Perform this: {final_text}"}
                 ],
                 stream=True
             )
@@ -146,19 +144,16 @@ async def generate_audio(
             full_audio_b64 = ""
             
             async for chunk in stream:
-                if not chunk.choices: 
-                    continue
+                if not chunk.choices: continue
                 delta = chunk.choices[0].delta
-                
                 if hasattr(delta, 'audio') and delta.audio and 'data' in delta.audio:
                     full_audio_b64 += delta.audio['data']
 
             if not full_audio_b64:
-                print(f"[tts] Warning: No audio data received (attempt {attempt}).")
+                print(f"[tts] Warning: No audio data (attempt {attempt}).")
                 await asyncio.sleep(_RETRY_BASE_DELAY * attempt)
                 continue
 
-            # Decode and Wrap
             pcm_bytes = base64.b64decode(full_audio_b64)
             wav_bytes = _create_wav_container(pcm_bytes)
             
@@ -170,7 +165,6 @@ async def generate_audio(
             if attempt < _MAX_RETRIES:
                 await asyncio.sleep(_RETRY_BASE_DELAY * attempt)
             else:
-                print("[tts] All attempts exhausted.")
                 return b""
 
     return b""
