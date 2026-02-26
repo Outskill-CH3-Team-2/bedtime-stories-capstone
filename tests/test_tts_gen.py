@@ -10,6 +10,7 @@ from datetime import datetime
 # to run the test: pytest tests/test_tts_gen.py -v -m integration
 # or pytest tests/test_tts_gen.py -v -m "not integration"
 # or pytest tests/test_tts_gen.py -v
+# or pytest tests/test_tts_gen.py -v -m integration -k "enrichment"
 # Adjust the import based on your actual function name in pipelines/tts.py
 # Assuming the main function is named 'generate_audio' or similar based on the context.
 # If your function is named differently (e.g. 'generate_speech'), please update this import.
@@ -245,3 +246,45 @@ async def test_auto_enrichment():
     assert len(audio_bytes) > 0
     print(f"   -> Saved to: {filepath}")
     print(f"   -> Listen to hear if it added [trembling] or [whispering]!")
+    
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_actor_mimic_sfx():
+    """
+    Test the 'One-Shot' SFX approach where the model mimics sounds itself.
+    We explicitly ask for non-verbal sounds in the text.
+    """
+    # 1. Setup paths
+    output_dir = os.path.join(os.path.dirname(__file__), "artifacts")
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 2. Input: A script requiring vocal sound effects
+    # We use phonetic spelling + stage directions to help the model.
+    sfx_script = (
+        "The old house was silent. [wind howling] Whooooo... Whooooo... "
+        "Suddenly, the floorboards groaned. [creaking sound] Creeeeaaaaak. "
+        "I froze. [heart beating loudly] Thump-thump. Thump-thump. "
+        "Then, from the darkness... [evil laughter] Mwahahahaha!"
+    )
+    
+    print(f"\n[Audio] Testing Actor Mimicry on: '{sfx_script[:50]}...'")
+
+    try:
+        from backend.pipelines.tts import generate_audio
+    except ImportError:
+        from pipelines.tts import generate_audio
+
+    # 3. Generate (expressive=True allows the system prompt to enforce acting)
+    audio_bytes = await generate_audio(sfx_script, expressive=True)
+    
+    # 4. Save to file
+    timestamp = datetime.now().strftime("%H%M%S")
+    filename = f"tts_mimic_sfx_{timestamp}.wav"
+    filepath = os.path.join(output_dir, filename)
+
+    with open(filepath, "wb") as f:
+        f.write(audio_bytes)
+
+    assert len(audio_bytes) > 0
+    print(f"   -> Saved to: {filepath}")
+    print(f"   -> Listen to verify if the model 'became' the wind and the door!")    
