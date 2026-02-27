@@ -1,7 +1,10 @@
-
 import { Scene, PrefiredJob } from '../types';
 
 const API_BASE = 'http://localhost:8000';
+
+// ── NEW: In-memory cache for background results ─────────────────────────────
+const resultCache = new Map<string, Scene>();
+// ────────────────────────────────────────────────────────────────────────────
 
 export const storyService = {
   /**
@@ -31,12 +34,6 @@ export const storyService = {
 
   /**
    * Pre-fire next-chapter generation for one choice branch.
-   *
-   * Call once per available choice immediately after displaying a scene.
-   * On the very first pre-fire of a new round, pass prevJobId + prevChoiceText
-   * so the backend commits the selected branch's history.
-   *
-   * Returns { session_id, job_id }.
    */
   async pregenerateNextChapter(
     sessionId: string,
@@ -97,6 +94,12 @@ export const storyService = {
   },
 
   async getResult(jobId: string): Promise<Scene> {
+      // If we have it cached, return it immediately!
+      if (resultCache.has(jobId)) {
+        console.log(`[getResult] ⚡ Returning cached result for ${jobId}`);
+        return resultCache.get(jobId)!;
+      }
+
       console.log(`[getResult] fetching job=${jobId}`);
       const response = await fetch(`${API_BASE}/story/result/${jobId}`);
       if (!response.ok) {
@@ -104,8 +107,11 @@ export const storyService = {
         throw new Error(`Failed to get result: ${response.status} ${text}`);
       }
       const scene: Scene = await response.json();
+      
+      // Cache it for future reference (e.g. going back)
+      resultCache.set(jobId, scene);
+
       const audioB64 = scene.narration_audio_b64 ?? '';
-      // Each base64 char ≈ 0.75 bytes; subtract padding chars for accuracy.
       const audioBytes = audioB64
         ? Math.floor((audioB64.length * 3) / 4) - (audioB64.endsWith('==') ? 2 : audioB64.endsWith('=') ? 1 : 0)
         : 0;
@@ -116,12 +122,41 @@ export const storyService = {
         `choices=${scene.choices.length}`
       );
       return scene;
-    },
+  },
+
+  // ── NEW: Helper methods for Preloading ────────────────────────────────────
+  
+  isResultCached(jobId: string): boolean {
+    return resultCache.has(jobId);
+  },
+
+  async getCompletedResult(jobId: string): Promise<Scene | null> {
+    return resultCache.get(jobId) || null;
+  },
 
   /**
-   * [DEBUG] Transcribe audio via Whisper and compare to story_text.
-   * Fires-and-forgets (caller should not await in production path).
+   * Background task: Checks if a job is done. If yes, downloads and caches the result.
+   * This is called by App.tsx in a background loop.
    */
+  async checkAndCache(jobId: string): Promise<void> {
+    if (resultCache.has(jobId)) return; // Already got it
+
+    try {
+      const statusRes = await fetch(`${API_BASE}/story/status/${jobId}`);
+      if (!statusRes.ok) return;
+      const statusData = await statusRes.json();
+
+      if (statusData.status === 'complete') {
+         // It's ready! Download payload silently.
+         console.log(`[checkAndCache] Job ${jobId} is ready. Downloading...`);
+         await this.getResult(jobId); // getResult auto-caches
+      }
+    } catch (e) {
+      // Silent fail for background tasks
+    }
+  },
+  // ──────────────────────────────────────────────────────────────────────────
+
   async debugStt(jobId: string, audiob64: string, storyText: string): Promise<void> {
     try {
       const resp = await fetch(`${API_BASE}/story/debug/stt`, {
