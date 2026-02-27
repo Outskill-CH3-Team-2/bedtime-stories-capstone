@@ -11,11 +11,6 @@ interface BookProps {
   onChoice: (choice: Choice) => void;
   isGenerating: boolean;
   appTitle?: string;
-  /**
-   * App-owned ref to an <audio> element that already exists in the DOM.
-   * When provided, Book does NOT render its own <audio> and attaches
-   * event listeners imperatively (so App can call .play() before Book mounts).
-   */
   audioRef?: React.MutableRefObject<HTMLAudioElement | null>;
 }
 
@@ -31,16 +26,14 @@ const Book: React.FC<BookProps> = ({
   const _ownAudioRef   = useRef<HTMLAudioElement | null>(null);
   const pagesRef       = useRef<HTMLElement[]>([]);
   const prevSceneRef   = useRef<Scene | null>(null);
-  // Set to true when we want onCanPlay to call play() (used for choice-based scenes
-  // where audio context was already unlocked via handleChoice's play() call).
   const pendingPlayRef = useRef<boolean>(false);
+  const textScrollRef  = useRef<HTMLDivElement>(null);
 
   const [isPlaying,    setIsPlaying]    = useState(false);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [bookW,        setBookW]        = useState(0);
   const [bookH,        setBookH]        = useState(0);
 
-  // The audio element we actually use: provided by App or our own fallback.
   const audioRef = audioRefProp ?? _ownAudioRef;
 
   // ── Measure wrapper for PageFlip ──────────────────────────────────────────
@@ -59,8 +52,7 @@ const Book: React.FC<BookProps> = ({
     return () => ro.disconnect();
   }, [measure]);
 
-  // ── Attach audio event listeners to the App-provided element ─────────────
-  // (When we own the element, JSX event props handle this instead.)
+  // ── Audio Event Listeners ────────────────────────────────────────────────
   useEffect(() => {
     if (!audioRefProp) return;
     const audio = audioRefProp.current;
@@ -75,7 +67,7 @@ const Book: React.FC<BookProps> = ({
       audio.play()
         .then(() => { setIsPlaying(true); setAudioBlocked(false); })
         .catch((err) => {
-          console.warn('[Book] onCanPlay play() blocked:', err.name, err.message);
+          console.warn('[Book] onCanPlay play() blocked:', err.name);
           setAudioBlocked(true);
         });
     };
@@ -90,11 +82,20 @@ const Book: React.FC<BookProps> = ({
       audio.removeEventListener('pause',   onPause);
       audio.removeEventListener('canplay', onCanPlay);
     };
-  // Stable ref object — only run once on mount
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── PageFlip init / re-init ───────────────────────────────────────────────
+  // ── Helper: Base64 to Blob ──────────────────────────────────────────────
+  const base64ToBlob = (b64: string, type: string) => {
+    const byteCharacters = atob(b64);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    return URL.createObjectURL(new Blob([byteArray], { type }));
+  };
+
+  // ── PageFlip Initialization ───────────────────────────────────────────────
   function makeBlankPage(): HTMLElement {
     const div = document.createElement('div');
     div.style.cssText = 'width:100%;height:100%;background:transparent;';
@@ -104,6 +105,10 @@ const Book: React.FC<BookProps> = ({
   useEffect(() => {
     if (!bookW || !bookH) return;
     const container = containerRef.current!;
+
+    // [FIX] REMOVED THE LINES THAT WERE KILLING THE AUDIO HERE
+    // previously: if (audioRefProp?.current) { ... pause ... } 
+    
     if (flipRef.current) {
       try { flipRef.current.destroy(); } catch {}
       flipRef.current = null;
@@ -139,10 +144,9 @@ const Book: React.FC<BookProps> = ({
     prevSceneRef.current = null;
 
     return () => { try { pf.destroy(); } catch {} };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookW, bookH]);
 
-  // ── Page-flip animation on scene change ──────────────────────────────────
+  // ── Page-flip Animation ──────────────────────────────────────────────────
   useEffect(() => {
     if (!flipRef.current || !bookW) return;
     if (prevSceneRef.current === scene) return;
@@ -159,43 +163,54 @@ const Book: React.FC<BookProps> = ({
     }
 
     prevSceneRef.current = scene;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scene]);
 
-  // ── Audio loading on scene change ─────────────────────────────────────────
-  // When App provides audioRef: App already called audio.src + audio.play()
-  // synchronously in its gesture handler (handleContinue / handleChoice).
-  // We check if audio is already playing/started; if so, skip re-loading
-  // (which would interrupt playback). If not started, load and queue via canplay.
+  // ── Scroll Reset ─────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (textScrollRef.current) {
+      textScrollRef.current.scrollTop = 0;
+    }
+  }, [scene]);
+
+  // ── Audio Loading Strategy ───────────────────────────────────────────────
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !scene.narration_audio_b64) return;
+    if (!audio) return;
 
-    const expectedSrc = `data:audio/wav;base64,${scene.narration_audio_b64}`;
-
-    // If App already set the same src and started playback, just update UI state.
-    if (audio.src === expectedSrc && (!audio.paused || audio.readyState >= 2)) {
-      console.log('[Book] audio already started by App gesture handler — skipping reload');
-      setAudioBlocked(false);
-      pendingPlayRef.current = false;
-      // isPlaying state is managed by the event listeners (onPlay fires automatically)
-      return;
+    // 1. Missing Audio Handling
+    if (!scene.narration_audio_b64) {
+       console.log('[Book] No audio for this scene. Clearing player.');
+       audio.pause();
+       audio.src = "";
+       audio.removeAttribute('data-scene-id');
+       setIsPlaying(false);
+       return;
     }
 
-    // Otherwise, load the audio (choice-based scene where polling fired the scene
-    // update — App called play() in handleChoice to unlock audio context, then
-    // polled until complete and set the new scene).
-    console.log('[Book] audio effect: loading new src (scene_step=', scene.step_number, ')');
-    pendingPlayRef.current = false;
-    setIsPlaying(false);
-    setAudioBlocked(false);
-    audio.src = expectedSrc;
+    // 2. Check Tag (Instant Play)
+    const currentId = audio.dataset.sceneId;
+    const targetId  = `${scene.session_id}_${scene.step_number}`;
+
+    if (currentId === targetId) {
+       console.log('[Book] Audio matches (App loaded it). Handing over.');
+       setAudioBlocked(false);
+       if (audio.paused) {
+           audio.play().catch(() => setAudioBlocked(true));
+       }
+       return; 
+    }
+
+    // 3. Load New Audio (Fallback)
+    console.log('[Book] Loading audio via Blob...');
+    audio.pause();
+    
+    const blobUrl = base64ToBlob(scene.narration_audio_b64, 'audio/wav');
+    audio.src = blobUrl;
+    audio.dataset.sceneId = targetId;
     audio.load();
-    // pendingPlayRef=true → onCanPlay handler will play() once data is ready.
-    // This works because handleChoice already called play() (even briefly) which
-    // unlocked the audio context for this element.
+    
     pendingPlayRef.current = true;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [scene]);
 
   const toggleAudio = () => {
@@ -224,8 +239,6 @@ const Book: React.FC<BookProps> = ({
       flexShrink: 0,
       filter: 'drop-shadow(0 40px 80px rgba(0,0,0,0.9)) drop-shadow(0 10px 20px rgba(0,0,0,0.5))',
     }}>
-
-      {/* ── Background book image ── */}
       <img
         src="/background_02.png"
         alt=""
@@ -241,7 +254,6 @@ const Book: React.FC<BookProps> = ({
         }}
       />
 
-      {/* ── PageFlip canvas (blank pages, flip animation only) ── */}
       <div
         ref={wrapperRef}
         style={{
@@ -255,7 +267,6 @@ const Book: React.FC<BookProps> = ({
         <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
       </div>
 
-      {/* ── LEFT page: illustration ── */}
       <div style={{
         position: 'absolute',
         top: 'calc(8% - 4%)', bottom: '9%',
@@ -291,7 +302,6 @@ const Book: React.FC<BookProps> = ({
         </p>
       </div>
 
-      {/* ── RIGHT page: title + text + choices ── */}
       <div style={{
         position: 'absolute',
         top: 'calc(8% - 4%)', bottom: '8%',
@@ -311,12 +321,14 @@ const Book: React.FC<BookProps> = ({
           {chapterLabel}
         </h2>
 
-        <div style={{
-          flex: '0 1 auto', maxHeight: '45%',
-          overflowY: 'auto', overflowX: 'hidden',
-          paddingRight: '4px', scrollbarWidth: 'thin',
-          scrollbarColor: 'rgba(139,69,19,0.25) transparent',
-        } as React.CSSProperties}>
+        <div 
+          ref={textScrollRef}
+          style={{
+            flex: '0 1 auto', maxHeight: '45%',
+            overflowY: 'auto', overflowX: 'hidden',
+            paddingRight: '4px', scrollbarWidth: 'thin',
+            scrollbarColor: 'rgba(139,69,19,0.25) transparent',
+          } as React.CSSProperties}>
           <p style={{
             fontFamily: "'Crimson Text', serif",
             fontSize: 'clamp(14px, 1.4vw, 17px)',
@@ -341,7 +353,11 @@ const Book: React.FC<BookProps> = ({
                 <button
                   key={c.id}
                   disabled={isGenerating}
-                  onClick={() => onChoice(c)}
+                  onClick={() => {
+                    const audio = audioRef.current;
+                    if (audio) { audio.pause(); }
+                    onChoice(c);
+                  }}
                   style={{
                     width: '100%', textAlign: 'left',
                     padding: '3% 4%', background: 'transparent',
@@ -362,7 +378,6 @@ const Book: React.FC<BookProps> = ({
         </div>
       </div>
 
-      {/* ── Own audio element (only when App hasn't provided one) ── */}
       {!audioRefProp && (
         <audio
           ref={_ownAudioRef}
@@ -382,7 +397,6 @@ const Book: React.FC<BookProps> = ({
         />
       )}
 
-      {/* ── Audio controls UI ── */}
       <div style={{
         position: 'absolute', bottom: '11.5%', left: '10%',
         display: 'flex', alignItems: 'center', gap: 8, zIndex: 10,
@@ -410,7 +424,6 @@ const Book: React.FC<BookProps> = ({
         )}
       </div>
 
-      {/* ── Generating spinner ── */}
       {isGenerating && (
         <div style={{
           position: 'absolute', top: '10.5%', right: '10%',

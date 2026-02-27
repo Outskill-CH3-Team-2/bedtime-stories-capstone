@@ -14,7 +14,7 @@ safety:
   max_tokens: 5000
 
 image:
-  model: "google/gemini-2.5-flash-image"
+  model: "google/gemini-3.1-flash-image-preview"
   size: "1024x1024"
   quality: "standard"
   style: "vivid"
@@ -22,3 +22,5 @@ image:
 tts:
   model: "openai/gpt-4o-audio-preview"
   voice: "onyx"
+  director: "openai/gpt-4o-mini"
+  audio_preview: "openai/gpt-4o-audio-preview"
