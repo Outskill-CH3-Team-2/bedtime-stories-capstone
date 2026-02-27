@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { StoryState, Scene, Choice, PrefiredJob } from './types';
 import { storyService } from './services/storyService';
@@ -16,6 +15,16 @@ interface IntroScreenProps {
 const IntroScreen: React.FC<IntroScreenProps> = ({ storyReady, onContinue }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(true);
+
+  // Stop video immediately when component unmounts to free up audio context
+  useEffect(() => {
+    return () => {
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.src = "";
+      }
+    };
+  }, []);
 
   const togglePlay = () => {
     const v = videoRef.current;
@@ -122,24 +131,10 @@ const App: React.FC = () => {
     error: null,
   });
 
-  // Pre-fired jobs: one per choice in the current scene.
-  // Map from choiceText → PrefiredJob so we can look up by what the user picked.
   const prefiredJobsRef = useRef<Map<string, PrefiredJob>>(new Map());
-
-  // The job we're currently polling (first chapter or the selected branch job).
   const activeJobIdRef = useRef<string | null>(null);
-
-  // The job + choice that was selected last round — needed to commit history.
   const selectedJobRef = useRef<{ jobId: string; choiceText: string } | null>(null);
-
-  const pollingRef = useRef<{
-    active: boolean;
-    intervalId: ReturnType<typeof setInterval> | null;
-  }>({ active: false, intervalId: null });
-
-  // App-owned audio element ref — shared with Book so we can call .play()
-  // synchronously from gesture handlers (handleContinue, handleChoice) before
-  // React has a chance to schedule an async useEffect.
+  const pollingRef = useRef<{ active: boolean; intervalId: ReturnType<typeof setInterval> | null; }>({ active: false, intervalId: null });
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const stopPolling = () => {
@@ -150,12 +145,19 @@ const App: React.FC = () => {
     }
   };
 
-  /**
-   * Pre-fire one job per choice for the upcoming scene.
-   * Called as soon as a scene is displayed (not when the user picks).
-   * On the first pre-fire of a new round, passes prevJobId + prevChoiceText
-   * to commit the selected branch's history in the backend.
-   */
+  // Background Poller
+  useEffect(() => {
+    const backgroundInterval = setInterval(() => {
+      prefiredJobsRef.current.forEach((job) => {
+        if (!storyService.isResultCached(job.jobId)) {
+           storyService.checkAndCache(job.jobId).catch(() => {});
+        }
+      });
+    }, 2000); 
+
+    return () => clearInterval(backgroundInterval);
+  }, []);
+
   const prefireNextChapterJobs = useCallback(async (
     sessionId: string,
     choices: Choice[],
@@ -164,12 +166,11 @@ const App: React.FC = () => {
 
     prefiredJobsRef.current.clear();
     const prevSelected = selectedJobRef.current;
-    selectedJobRef.current = null; // reset; will be set on next pick
+    selectedJobRef.current = null; 
 
     for (let i = 0; i < choices.length; i++) {
       const choice = choices[i];
       try {
-        // Only the first pre-fire carries the commit payload
         const isFirst = i === 0;
         const job = await storyService.pregenerateNextChapter(
           sessionId,
@@ -204,17 +205,12 @@ const App: React.FC = () => {
             } else {
               setDisplayScene(result);
               setState(prev => ({ ...prev, status: 'ready', currentScene: result }));
-              // Pre-fire next chapter jobs exactly here — once, with the correct session state.
-              // selectedJobRef is already set by handleChoice before startPolling was called.
               if (!result.is_ending && result.choices.length > 0) {
                 prefireNextChapterJobs(result.session_id, result.choices);
               }
             }
-            // [DEBUG] STT: transcribe the received audio and compare to story_text
             if (result.narration_audio_b64) {
               storyService.debugStt(jobId, result.narration_audio_b64, result.story_text);
-            } else {
-              console.warn(`[debugStt] job=${jobId} — no audio in result (narration_audio_b64 is empty)`);
             }
         } else if (status === 'failed') {
           stopPolling();
@@ -241,34 +237,30 @@ const App: React.FC = () => {
     }
   };
 
-  // User clicks "Open the Book" — move pending scene to display and pre-fire jobs
   const handleContinue = useCallback(() => {
     if (!pendingScene || !state.sessionId) return;
-
-    // ── Play audio synchronously while still in the gesture handler ──────────
-    // This is the ONLY reliable way to pass Chrome's autoplay policy:
-    // audio.src + audio.play() must be called directly in the click callback,
-    // not inside a useEffect (which runs after paint, possibly after gesture window).
+    
+    // [FIX] Play First Page Audio synchronously
     const audio = audioRef.current;
     if (audio && pendingScene.narration_audio_b64) {
+      audio.pause();
+      audio.currentTime = 0;
       audio.src = `data:audio/wav;base64,${pendingScene.narration_audio_b64}`;
+      // Tag it so Book.tsx knows we started it
+      audio.dataset.sceneId = `${pendingScene.session_id}_${pendingScene.step_number}`;
       audio.load();
-      audio.play().catch((err) => {
-        console.warn('[App] handleContinue play() blocked:', err.name);
-      });
+      audio.play().catch((err) => console.warn('[App] First page play blocked:', err));
     }
 
     setDisplayScene(pendingScene);
     setPendingScene(null);
     setState(prev => ({ ...prev, status: 'ready' }));
 
-    // Pre-fire next chapter jobs for all choices in the scene
     if (!pendingScene.is_ending) {
       prefireNextChapterJobs(state.sessionId, pendingScene.choices);
     }
   }, [pendingScene, state.sessionId, prefireNextChapterJobs]);
 
-  // User selects a choice — find the pre-fired job and poll it
   const handleChoice = useCallback(async (choice: Choice) => {
     const sessionId = state.sessionId;
     if (!sessionId) return;
@@ -279,22 +271,41 @@ const App: React.FC = () => {
       return;
     }
 
-    // ── Unlock audio context while inside the gesture handler ────────────────
-    // The next scene's audio will arrive from a polling callback (not a gesture).
-    // Calling play() NOW (on the current audio) keeps the audio context "active",
-    // so that when Book later calls audio.src = newSrc + audio.play(), the browser
-    // allows it without requiring another gesture.
     const audio = audioRef.current;
-    if (audio) {
-      audio.play().catch(() => { /* already playing or blocked — ignore */ });
+    if (audio) audio.pause(); // Stop old track
+
+    selectedJobRef.current = { jobId: prefiredJob.jobId, choiceText: choice.text };
+
+    // Instant Swap Logic
+    const cachedResult = await storyService.getCompletedResult(prefiredJob.jobId);
+    if (cachedResult) {
+      console.log(`⚡ [App] Instant transition to Step ${cachedResult.step_number}`);
+      
+      // Play Instant Audio
+      if (audio && cachedResult.narration_audio_b64) {
+         audio.src = `data:audio/wav;base64,${cachedResult.narration_audio_b64}`;
+         audio.dataset.sceneId = `${cachedResult.session_id}_${cachedResult.step_number}`;
+         audio.load();
+         audio.play().catch(e => console.warn("Instant play blocked:", e));
+      }
+
+      setDisplayScene(cachedResult);
+      setPendingScene(null);
+      setState(prev => ({ ...prev, status: 'ready', currentScene: cachedResult }));
+      
+      if (!cachedResult.is_ending && cachedResult.choices.length > 0) {
+         prefireNextChapterJobs(sessionId, cachedResult.choices);
+      }
+      return; 
     }
 
-    // Record this selection so the NEXT round can commit it
-    selectedJobRef.current = { jobId: prefiredJob.jobId, choiceText: choice.text };
+    // Fallback Polling
+    // Clear audio data-scene-id so Book.tsx will take over when polling finishes
+    if (audio) audio.removeAttribute('data-scene-id');
 
     setState(prev => ({ ...prev, status: 'polling' }));
     startPolling(prefiredJob.jobId, false);
-  }, [state.sessionId, startPolling]);
+  }, [state.sessionId, startPolling, prefireNextChapterJobs]);
 
   const isGenerating = state.status === 'polling';
   const showIntro = state.status === 'starting' || state.status === 'polling' || state.status === 'scene_ready';
@@ -312,11 +323,8 @@ const App: React.FC = () => {
           background: 'radial-gradient(ellipse at 50% 60%, #2a1c0a 0%, #0a0602 100%)',
         }} />
 
-        {/* Always-mounted audio element so handleContinue/handleChoice can call
-            audio.play() synchronously in the gesture handler before Book mounts. */}
         <audio ref={audioRef} style={{ display: 'none' }} />
 
-        {/* Idle: Start Screen */}
       {state.status === 'idle' && (
         <div className="relative z-10 flex flex-col items-center animate-fadeIn px-4 w-full" style={{ maxWidth: 480 }}>
           <img src="/ClosedBook.png" alt="A closed storybook" className="w-full"
@@ -337,12 +345,10 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Intro video */}
       {showIntro && !showBook && (
         <IntroScreen storyReady={state.status === 'scene_ready'} onContinue={handleContinue} />
       )}
 
-      {/* Book view */}
       {showBook && (
         <div className="relative z-10 animate-fadeIn" style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Book
@@ -355,7 +361,6 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Error */}
       {state.status === 'error' && (
         <div className="relative z-10 max-w-md w-full p-12 bg-[#2c1810] text-[#f2e8cf] rounded-sm text-center font-cinzel border-4 border-[#8b4513] book-shadow">
           <div className="text-4xl mb-6">✦</div>
