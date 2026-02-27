@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { StoryState, Scene, Choice, PrefiredJob } from './types';
+import { StoryState, Scene, Choice, PrefiredJob, StoryConfig, DEFAULT_CONFIG } from './types';
 import { storyService } from './services/storyService';
 import Book from './components/Book';
+import ConfigurationPage from './components/ConfigurationPage';
+import LandingCanvas from './components/LandingCanvas';
 
 const APP_TITLE = "Dream Weaver";
-const CHILD_INFO = { name: "Arlo", age: 7, personalization: {} };
 
 // ── Intro video player shown while the story is generating ──────────────────
 interface IntroScreenProps {
@@ -30,7 +31,7 @@ const IntroScreen: React.FC<IntroScreenProps> = ({ storyReady, onContinue }) => 
     const v = videoRef.current;
     if (!v) return;
     if (v.paused) { v.play(); setPlaying(true); }
-    else          { v.pause(); setPlaying(false); }
+    else { v.pause(); setPlaying(false); }
   };
 
   const restart = () => {
@@ -85,14 +86,14 @@ const IntroScreen: React.FC<IntroScreenProps> = ({ storyReady, onContinue }) => 
         <button onClick={togglePlay} className="ink-btn-dark" title={playing ? 'Pause' : 'Play'}
           style={{ width: 44, height: 44, borderRadius: '50%', flexShrink: 0 }}>
           {playing
-            ? <svg height="18" width="18" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-            : <svg height="18" width="18" fill="currentColor" viewBox="0 0 24 24" style={{ marginLeft: 2 }}><path d="M8 5v14l11-7z"/></svg>
+            ? <svg height="18" width="18" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
+            : <svg height="18" width="18" fill="currentColor" viewBox="0 0 24 24" style={{ marginLeft: 2 }}><path d="M8 5v14l11-7z" /></svg>
           }
         </button>
         <button onClick={restart} className="ink-btn-dark" title="Restart video"
           style={{ width: 44, height: 44, borderRadius: '50%', flexShrink: 0 }}>
           <svg height="18" width="18" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/>
+            <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
           </svg>
         </button>
         <button
@@ -123,6 +124,9 @@ const App: React.FC = () => {
   const [idea, setIdea] = useState('');
   const [displayScene, setDisplayScene] = useState<Scene | null>(null);
   const [pendingScene, setPendingScene] = useState<Scene | null>(null);
+  const [showConfig, setShowConfig] = useState(false);
+  const [config, setConfig] = useState<StoryConfig>(DEFAULT_CONFIG);
+  const [animPaused, setAnimPaused] = useState(false);
 
   const [state, setState] = useState<StoryState>({
     sessionId: null,
@@ -150,10 +154,10 @@ const App: React.FC = () => {
     const backgroundInterval = setInterval(() => {
       prefiredJobsRef.current.forEach((job) => {
         if (!storyService.isResultCached(job.jobId)) {
-           storyService.checkAndCache(job.jobId).catch(() => {});
+          storyService.checkAndCache(job.jobId).catch(() => { });
         }
       });
-    }, 2000); 
+    }, 2000);
 
     return () => clearInterval(backgroundInterval);
   }, []);
@@ -166,7 +170,7 @@ const App: React.FC = () => {
 
     prefiredJobsRef.current.clear();
     const prevSelected = selectedJobRef.current;
-    selectedJobRef.current = null; 
+    selectedJobRef.current = null;
 
     for (let i = 0; i < choices.length; i++) {
       const choice = choices[i];
@@ -200,18 +204,18 @@ const App: React.FC = () => {
           const result = await storyService.getResult(jobId);
 
           if (isFirstScene) {
-              setPendingScene(result);
-              setState(prev => ({ ...prev, status: 'scene_ready', currentScene: result }));
-            } else {
-              setDisplayScene(result);
-              setState(prev => ({ ...prev, status: 'ready', currentScene: result }));
-              if (!result.is_ending && result.choices.length > 0) {
-                prefireNextChapterJobs(result.session_id, result.choices);
-              }
+            setPendingScene(result);
+            setState(prev => ({ ...prev, status: 'scene_ready', currentScene: result }));
+          } else {
+            setDisplayScene(result);
+            setState(prev => ({ ...prev, status: 'ready', currentScene: result }));
+            if (!result.is_ending && result.choices.length > 0) {
+              prefireNextChapterJobs(result.session_id, result.choices);
             }
-            if (result.narration_audio_b64) {
-              storyService.debugStt(jobId, result.narration_audio_b64, result.story_text);
-            }
+          }
+          if (result.narration_audio_b64) {
+            storyService.debugStt(jobId, result.narration_audio_b64, result.story_text);
+          }
         } else if (status === 'failed') {
           stopPolling();
           setState(prev => ({ ...prev, status: 'error', error: 'The ink failed to bind to the page.' }));
@@ -229,7 +233,14 @@ const App: React.FC = () => {
     if (!idea.trim()) return;
     try {
       setState(prev => ({ ...prev, status: 'starting' }));
-      const { sessionId, jobId } = await storyService.startStory(idea, CHILD_INFO);
+
+      const childInfo = {
+        name: config.childName || "Arlo",
+        age: config.age ? Number(config.age) : 7,
+        personalization: { ...config }
+      };
+
+      const { sessionId, jobId } = await storyService.startStory(idea, childInfo);
       setState(prev => ({ ...prev, sessionId, status: 'polling' }));
       startPolling(jobId, true);
     } catch (err: any) {
@@ -239,7 +250,7 @@ const App: React.FC = () => {
 
   const handleContinue = useCallback(() => {
     if (!pendingScene || !state.sessionId) return;
-    
+
     // [FIX] Play First Page Audio synchronously
     const audio = audioRef.current;
     if (audio && pendingScene.narration_audio_b64) {
@@ -280,23 +291,23 @@ const App: React.FC = () => {
     const cachedResult = await storyService.getCompletedResult(prefiredJob.jobId);
     if (cachedResult) {
       console.log(`⚡ [App] Instant transition to Step ${cachedResult.step_number}`);
-      
+
       // Play Instant Audio
       if (audio && cachedResult.narration_audio_b64) {
-         audio.src = `data:audio/wav;base64,${cachedResult.narration_audio_b64}`;
-         audio.dataset.sceneId = `${cachedResult.session_id}_${cachedResult.step_number}`;
-         audio.load();
-         audio.play().catch(e => console.warn("Instant play blocked:", e));
+        audio.src = `data:audio/wav;base64,${cachedResult.narration_audio_b64}`;
+        audio.dataset.sceneId = `${cachedResult.session_id}_${cachedResult.step_number}`;
+        audio.load();
+        audio.play().catch(e => console.warn("Instant play blocked:", e));
       }
 
       setDisplayScene(cachedResult);
       setPendingScene(null);
       setState(prev => ({ ...prev, status: 'ready', currentScene: cachedResult }));
-      
+
       if (!cachedResult.is_ending && cachedResult.choices.length > 0) {
-         prefireNextChapterJobs(sessionId, cachedResult.choices);
+        prefireNextChapterJobs(sessionId, cachedResult.choices);
       }
-      return; 
+      return;
     }
 
     // Fallback Polling
@@ -309,40 +320,116 @@ const App: React.FC = () => {
 
   const isGenerating = state.status === 'polling';
   const showIntro = state.status === 'starting' || state.status === 'polling' || state.status === 'scene_ready';
-  const showBook  = displayScene !== null && (state.status === 'ready' || state.status === 'polling');
+  const showBook = displayScene !== null && (state.status === 'ready' || state.status === 'polling');
 
   return (
     <div style={{
       position: 'fixed', inset: 0,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: '#0a0602',
+      background: '#fdf6e9',
       overflow: 'hidden',
     }}>
+      {/* Soft parchment gradient layer */}
       <div style={{
-          position: 'absolute', inset: 0,
-          background: 'radial-gradient(ellipse at 50% 60%, #2a1c0a 0%, #0a0602 100%)',
-        }} />
+        position: 'absolute', inset: 0,
+        background: 'radial-gradient(ellipse at 50% 40%, #fef3d7 0%, #f5e6c8 45%, #ecdbb0 100%)',
+      }} />
 
-        <audio ref={audioRef} style={{ display: 'none' }} />
+      {/* Very faint paper texture overlay */}
+      <div style={{
+        position: 'absolute', inset: 0,
+        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E")`,
+        backgroundRepeat: 'repeat',
+        opacity: 0.6,
+        pointerEvents: 'none',
+      }} />
+
+      {/* Canvas particle layer — lightweight golden dust */}
+      <LandingCanvas paused={animPaused} />
+
+      <audio ref={audioRef} style={{ display: 'none' }} />
+
+      {/* Top-right controls: Pause | Settings */}
+      {state.status === 'idle' && (
+        <div className="fixed top-4 right-4 flex items-center gap-2" style={{ zIndex: 60 }}>
+          {/* Pause / Resume animation toggle */}
+          <button
+            onClick={() => setAnimPaused(p => !p)}
+            className="p-2.5 text-[#6b3a1f] hover:text-[#f2e8cf] hover:bg-[#8b4513] transition-all rounded-full flex items-center justify-center opacity-70 hover:opacity-100 bg-white/60 border border-[#c9a87c]/50 backdrop-blur-sm shadow-sm"
+            title={animPaused ? 'Resume animations' : 'Pause animations'}
+            aria-label={animPaused ? 'Resume animations' : 'Pause animations'}
+          >
+            {animPaused ? (
+              // Play icon
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            ) : (
+              // Pause icon
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+              </svg>
+            )}
+          </button>
+
+          {/* Settings / Configuration button */}
+          <button
+            onClick={() => setShowConfig(true)}
+            className="p-3 text-[#6b3a1f] hover:text-[#f2e8cf] hover:bg-[#8b4513] transition-all rounded-full flex items-center justify-center opacity-80 hover:opacity-100 bg-white/60 border border-[#c9a87c]/50 backdrop-blur-sm shadow-sm"
+            title="Personalize Story"
+            aria-label="Configuration Settings"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+          </button>
+        </div>
+      )}
 
       {state.status === 'idle' && (
-        <div className="relative z-10 flex flex-col items-center animate-fadeIn px-4 w-full" style={{ maxWidth: 480 }}>
-          <img src="/ClosedBook.png" alt="A closed storybook" className="w-full"
-            style={{ filter: 'drop-shadow(0 20px 60px rgba(0,0,0,0.8))' }} />
-          <form onSubmit={handleStart} className="w-full mt-6 space-y-4">
+        <div className="relative z-10 flex flex-col items-center animate-fadeIn px-4 w-full" style={{ maxWidth: 360 }}>
+
+          {/* Warm radial glow behind book */}
+          <div className="book-glow-pulse" style={{
+            position: 'absolute',
+            width: '120%', height: '70%',
+            top: '5%', left: '50%',
+            marginLeft: '-60%', // centering instead of transform to avoid CSS animation conflict
+            background: 'radial-gradient(ellipse at center, rgba(255,220,140,0.45) 0%, rgba(249,200,100,0.15) 50%, transparent 75%)',
+            borderRadius: '50%',
+            pointerEvents: 'none',
+            zIndex: 0,
+          }} />
+
+          <img src="/ClosedBook.png" alt="A closed storybook"
+            className="hero-book-entry"
+            style={{ width: '100%', height: 'auto', display: 'block', filter: 'drop-shadow(0 12px 40px rgba(139,80,20,0.25))', position: 'relative', zIndex: 1 }} />
+          <form onSubmit={handleStart} className="w-full mt-4 space-y-4">
             <textarea
               value={idea}
               onChange={(e) => setIdea(e.target.value)}
               placeholder="Begin a tale about… a brave knight who befriends a dragon"
               rows={2}
-              className="w-full bg-[#1a0f0a]/80 border border-[#8b4513]/50 rounded-sm p-4 text-base font-serif italic outline-none text-[#f2e8cf] placeholder:text-[#f2e8cf]/25 focus:border-[#8b4513] transition-all resize-none"
+              className="prompt-reveal w-full bg-white/70 border border-[#c9a87c]/60 rounded-sm p-4 text-base font-serif italic outline-none text-[#3d1f0d] placeholder:text-[#8b6540]/40 focus:border-[#8b4513] transition-colors resize-none shadow-inner backdrop-blur-sm"
             />
             <button type="submit"
-              className="w-full py-3 bg-[#8b4513] text-[#f2e8cf] font-cinzel text-sm rounded-sm hover:bg-[#a0521a] transition-all shadow-xl uppercase tracking-[0.3em]">
+              className="cta-reveal w-full py-3 bg-[#8b4513] text-[#fef3d7] font-cinzel text-sm rounded-sm hover:bg-[#a0521a] transition-colors shadow-lg uppercase tracking-[0.3em]">
               Open the Book
             </button>
           </form>
         </div>
+      )}
+
+      {showConfig && (
+        <ConfigurationPage
+          config={config}
+          onSave={(newConfig) => {
+            setConfig(newConfig);
+            setShowConfig(false);
+          }}
+          onClose={() => setShowConfig(false)}
+        />
       )}
 
       {showIntro && !showBook && (
@@ -352,12 +439,12 @@ const App: React.FC = () => {
       {showBook && (
         <div className="relative z-10 animate-fadeIn" style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <Book
-              audioRef={audioRef}
-              scene={displayScene!}
-              onChoice={handleChoice}
-              isGenerating={isGenerating}
-              appTitle={APP_TITLE}
-            />
+            audioRef={audioRef}
+            scene={displayScene!}
+            onChoice={handleChoice}
+            isGenerating={isGenerating}
+            appTitle={APP_TITLE}
+          />
         </div>
       )}
 
