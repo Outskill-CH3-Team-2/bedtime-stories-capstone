@@ -33,7 +33,7 @@ async def generate_image(client, prompt, ref_image_paths=None):
 
     # Call the model via OpenRouter
     response = client.chat.completions.create(
-        model="google/gemini-2.5-flash-image", 
+        model="google/gemini-3.1-flash-image-preview", 
         messages=[
             {
                 "role": "user",
@@ -65,7 +65,8 @@ class TestImageGeneration:
     async def test_01_simple_t2i(self, client, characters, test_dir):
         print(f"\n🚀 Running Test 01: Simple T2I for {characters[0]['name']}...")
         char = characters[0]
-        prompt = f"Studio portrait of {char['name']}, storybook style, white background."
+        prompt = f"""Studio portrait of {char['name']}, a picture that looks like a child drawings, white background, 
+        do not generate text on the picture"""
         
         img_bytes = await generate_image(client, prompt)
         out = os.path.join(test_dir, "test_output_1.png")
@@ -80,7 +81,8 @@ class TestImageGeneration:
             os.path.join(test_dir, "test_image_01.png")
         ]
         char = characters[0]
-        prompt = f"The child from the reference photo singing with {char['name']} who plays on playing on {char['instrument']}."
+        prompt = f"""The child from the reference photo singing with {char['name']} who makes music on {char['instrument']}, 
+        a picture that looks like a child drawings, do not generate text on the picture"""
         
         img_bytes = await generate_image(client, prompt, refs)
         out = os.path.join(test_dir, "test_output_2.png")
@@ -101,7 +103,8 @@ class TestImageGeneration:
         f"""A group shot featuring the child from the reference photo and two characters 
         {characters[0]['name']} playing on {characters[0]['instrument']} and
         {characters[1]['name']} playing on {characters[1]['instrument']}
-        playing music together on a medow."""
+        playing music together on a medow. The picture that looks like a child drawings, 
+        do not generate text on the picture."""
         )
         
         img_bytes = await generate_image(client, prompt, refs)

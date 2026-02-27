@@ -67,8 +67,8 @@ def _get_model() -> str:
 
 def _build_image_prompt(narrative: str, characters: List[CharacterRef]) -> str:
     style = (
-        "Children's storybook illustration, warm painterly style, "
-        "vibrant colours, soft lighting, highly detailed, whimsical."
+        """Children's storybook illustration, a picture that looks like a child drawings, 
+        do not generate text on the picture"""
     )
 
     if not characters:
