@@ -375,6 +375,44 @@
     .cta-reveal {
       opacity: 0;
       animation: ctaReveal 0.8s cubic-bezier(0, 0, 0.2, 1) 0.85s forwards;
+      overflow: hidden;
+      position: relative;
+    }
+
+    /* CTA button shimmer — diagonal highlight sweeps after button appears */
+    @keyframes shimmer {
+      0% {
+        transform: translateX(-120%) skewX(-20deg);
+        opacity: 0;
+      }
+
+      5% {
+        opacity: 1;
+      }
+
+      40% {
+        transform: translateX(220%) skewX(-20deg);
+        opacity: 0.6;
+      }
+
+      100% {
+        transform: translateX(300%) skewX(-20deg);
+        opacity: 0;
+      }
+    }
+
+    .cta-reveal::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      width: 40%;
+      background: linear-gradient(105deg,
+          transparent 20%,
+          rgba(255, 245, 200, 0.28) 50%,
+          transparent 80%);
+      animation: shimmer 6s 1.4s ease-in-out infinite;
+      pointer-events: none;
+      border-radius: inherit;
     }
 
     /* Keyboard focus outlines */
@@ -384,9 +422,58 @@
       outline-offset: 3px;
     }
 
+    /* Textarea focus warm amber glow */
+    .prompt-reveal:focus {
+      box-shadow:
+        0 0 0 3px rgba(139, 80, 20, 0.18),
+        0 0 22px rgba(249, 200, 100, 0.14),
+        inset 0 1px 4px rgba(0, 0, 0, 0.06);
+      border-color: #8b4513 !important;
+    }
+
+    /* Book gentle float — starts after hero entry (1.2s) */
+    @keyframes bookFloat {
+
+      0%,
+      100% {
+        transform: translateY(0px);
+      }
+
+      50% {
+        transform: translateY(-7px);
+      }
+    }
+
+    .book-float {
+      animation:
+        heroBookEntry 1.2s cubic-bezier(0, 0, 0.2, 1) forwards,
+        bookFloat 4.2s 1.2s ease-in-out infinite;
+    }
+
+    /* Tagline letter stagger fade-up */
+    @keyframes taglineFadeUp {
+      from {
+        opacity: 0;
+        transform: translateY(5px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .tagline-letter {
+      display: inline-block;
+      opacity: 0;
+      animation: taglineFadeUp 0.5s ease-out forwards;
+    }
+
     /* Respect reduced motion preference */
     @media (prefers-reduced-motion: reduce) {
-      .hero-book-entry {
+
+      .hero-book-entry,
+      .book-float {
         animation: none;
         opacity: 1;
         transform: none;
@@ -405,6 +492,17 @@
 
       .prompt-reveal,
       .cta-reveal {
+        animation: none;
+        opacity: 1;
+        transform: none;
+      }
+
+      .cta-reveal::after {
+        animation: none;
+        display: none;
+      }
+
+      .tagline-letter {
         animation: none;
         opacity: 1;
         transform: none;
