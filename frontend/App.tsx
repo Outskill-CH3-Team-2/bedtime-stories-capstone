@@ -162,6 +162,12 @@ const App: React.FC = () => {
     return () => clearInterval(backgroundInterval);
   }, []);
 
+  // Prune stale IDB entries on startup
+  useEffect(() => {
+    storyService.clearOldEntries().catch(() => { });
+  }, []);
+  // ─────────────────────────────────────────────────────────────────────────
+
   const prefireNextChapterJobs = useCallback(async (
     sessionId: string,
     choices: Choice[],
@@ -188,6 +194,12 @@ const App: React.FC = () => {
         console.error(`[App] Failed to pre-fire job for choice "${choice.text}":`, err);
       }
     }
+
+    // Persist prefired jobs so IDB can serve them across refresh
+    const allJobs = Array.from(prefiredJobsRef.current.values()) as PrefiredJob[];
+    if (allJobs.length > 0) {
+      storyService.savePrefired(sessionId, allJobs).catch(() => { });
+    }
   }, []);
 
   const startPolling = useCallback((jobId: string, isFirstScene: boolean) => {
@@ -206,9 +218,13 @@ const App: React.FC = () => {
           if (isFirstScene) {
             setPendingScene(result);
             setState(prev => ({ ...prev, status: 'scene_ready', currentScene: result }));
+            // Persist the session pointer so refresh can resume here
+            storyService.saveSession(result.session_id, jobId).catch(() => { });
           } else {
             setDisplayScene(result);
             setState(prev => ({ ...prev, status: 'ready', currentScene: result }));
+            // Persist the session pointer so refresh can resume from this step
+            storyService.saveSession(result.session_id, jobId).catch(() => { });
             if (!result.is_ending && result.choices.length > 0) {
               prefireNextChapterJobs(result.session_id, result.choices);
             }
@@ -232,6 +248,9 @@ const App: React.FC = () => {
     e.preventDefault();
     if (!idea.trim()) return;
     try {
+      // Clear any previous session from IDB before starting fresh
+      storyService.clearCache().catch(() => { });
+
       setState(prev => ({ ...prev, status: 'starting' }));
 
       const childInfo = {
@@ -329,10 +348,13 @@ const App: React.FC = () => {
       background: '#fdf6e9',
       overflow: 'hidden',
     }}>
-      {/* Soft parchment gradient layer */}
+      {/* Dynamic Background Layer */}
       <div style={{
         position: 'absolute', inset: 0,
-        background: 'radial-gradient(ellipse at 50% 40%, #fef3d7 0%, #f5e6c8 45%, #ecdbb0 100%)',
+        background: state.status === 'idle'
+          ? 'linear-gradient(to bottom, #070b19 0%, #1a2542 60%, #301f1a 100%)'
+          : 'radial-gradient(ellipse at 50% 40%, #fef3d7 0%, #f5e6c8 45%, #ecdbb0 100%)',
+        transition: 'background 1.5s ease',
       }} />
 
       {/* Very faint paper texture overlay */}
@@ -340,12 +362,13 @@ const App: React.FC = () => {
         position: 'absolute', inset: 0,
         backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E")`,
         backgroundRepeat: 'repeat',
-        opacity: 0.6,
+        opacity: state.status === 'idle' ? 0.3 : 0.6,
         pointerEvents: 'none',
+        transition: 'opacity 1.5s ease',
       }} />
 
-      {/* Canvas particle layer — lightweight golden dust */}
-      <LandingCanvas paused={animPaused} />
+      {/* Canvas particle layer — lightweight starry dust in idle state */}
+      {state.status === 'idle' && <LandingCanvas paused={animPaused} />}
 
       <audio ref={audioRef} style={{ display: 'none' }} />
 
@@ -388,33 +411,48 @@ const App: React.FC = () => {
       )}
 
       {state.status === 'idle' && (
-        <div className="relative z-10 flex flex-col items-center animate-fadeIn px-4 w-full" style={{ maxWidth: 360 }}>
+        <div className="relative z-10 flex flex-col items-center animate-fadeIn px-6 w-full max-w-lg" style={{ marginTop: '2vh' }}>
 
-          {/* Warm radial glow behind book */}
-          <div className="book-glow-pulse" style={{
-            position: 'absolute',
-            width: '120%', height: '70%',
-            top: '5%', left: '50%',
-            marginLeft: '-60%', // centering instead of transform to avoid CSS animation conflict
-            background: 'radial-gradient(ellipse at center, rgba(255,220,140,0.45) 0%, rgba(249,200,100,0.15) 50%, transparent 75%)',
-            borderRadius: '50%',
-            pointerEvents: 'none',
-            zIndex: 0,
-          }} />
+          {/* Animated tagline — stagger-letter fade above title */}
+          <div aria-label="Every night, a new adventure" style={{
+            position: 'relative', zIndex: 1,
+            fontFamily: "'Cinzel', serif",
+            fontSize: 10,
+            letterSpacing: '0.25em',
+            textTransform: 'uppercase',
+            color: '#cbd5e1', // silver
+            textAlign: 'center',
+            whiteSpace: 'nowrap',
+            marginBottom: 10,
+          }}>
+            {'Every night, a new adventure'.split('').map((char, i) => (
+              <span key={i} className="tagline-letter" style={{ animationDelay: `${0.6 + i * 0.035}s` }}>
+                {char === ' ' ? ' ' : char}
+              </span>
+            ))}
+          </div>
 
-          <img src="/ClosedBook.png" alt="A closed storybook"
-            className="hero-book-entry"
-            style={{ width: '100%', height: 'auto', display: 'block', filter: 'drop-shadow(0 12px 40px rgba(139,80,20,0.25))', position: 'relative', zIndex: 1 }} />
-          <form onSubmit={handleStart} className="w-full mt-4 space-y-4">
+          <h1 className="font-cinzel text-5xl md:text-[52px] text-[#f8fafc] mb-8 tracking-tight whitespace-nowrap" style={{ textShadow: '0 4px 16px rgba(0,0,0,0.5)' }}>
+            Dream Weaver
+          </h1>
+
+          <div className="relative p-4 rounded-2xl backdrop-blur-xl bg-white/10 border border-white/20 shadow-[0_12px_40px_rgba(0,0,0,0.8)] mb-8 w-[85%] max-w-[340px]">
+            <img src="/ClosedBook.png" alt="A closed storybook"
+              className="book-float rounded-xl"
+              style={{ width: '100%', height: 'auto', display: 'block', filter: 'drop-shadow(0 8px 20px rgba(0,0,0,0.4))', position: 'relative', zIndex: 1 }} />
+          </div>
+
+          <form onSubmit={handleStart} className="w-full flex flex-col items-center space-y-6">
             <textarea
               value={idea}
               onChange={(e) => setIdea(e.target.value)}
               placeholder="Begin a tale about… a brave knight who befriends a dragon"
               rows={2}
-              className="prompt-reveal w-full bg-white/70 border border-[#c9a87c]/60 rounded-sm p-4 text-base font-serif italic outline-none text-[#3d1f0d] placeholder:text-[#8b6540]/40 focus:border-[#8b4513] transition-colors resize-none shadow-inner backdrop-blur-sm"
+              className="prompt-reveal w-full max-w-sm bg-black/20 border border-white/10 backdrop-blur-md rounded-xl p-4 text-center text-lg font-serif italic outline-none text-[#f8fafc] placeholder:text-[#94a3b8] focus:border-white/30 focus:bg-black/30 transition-all resize-none shadow-inner"
+              style={{ lineHeight: '1.4', textShadow: '0 2px 4px rgba(0,0,0,0.5)' }}
             />
             <button type="submit"
-              className="cta-reveal w-full py-3 bg-[#8b4513] text-[#fef3d7] font-cinzel text-sm rounded-sm hover:bg-[#a0521a] transition-colors shadow-lg uppercase tracking-[0.3em]">
+              className="cta-reveal w-[260px] py-3.5 bg-gradient-to-b from-[#4a2411] to-[#2d1205] text-[#fef3d7] font-cinzel text-[13px] rounded-full tracking-[0.2em] shadow-[0_4px_14px_rgba(0,0,0,0.5)] uppercase hover:from-[#5c2d15] hover:to-[#3e1806] transition-all border border-[#5c351c] flex items-center justify-center">
               Open the Book
             </button>
           </form>
