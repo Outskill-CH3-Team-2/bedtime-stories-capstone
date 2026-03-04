@@ -1,4 +1,5 @@
-import { Scene, PrefiredJob } from '../types';
+import { Scene, PrefiredJob, StoryConfig } from '../types';
+import { storyCache } from './storyCache';
 
 const API_BASE = 'http://localhost:8000';
 
@@ -45,7 +46,7 @@ export const storyService = {
       session_id: sessionId,
       choice_text: choiceText,
     };
-    if (prevJobId)     body.prev_job_id     = prevJobId;
+    if (prevJobId) body.prev_job_id = prevJobId;
     if (prevChoiceText) body.prev_choice_text = prevChoiceText;
 
     const response = await fetch(`${API_BASE}/story/generate`, {
@@ -94,38 +95,46 @@ export const storyService = {
   },
 
   async getResult(jobId: string): Promise<Scene> {
-      // If we have it cached, return it immediately!
-      if (resultCache.has(jobId)) {
-        console.log(`[getResult] ⚡ Returning cached result for ${jobId}`);
-        return resultCache.get(jobId)!;
-      }
+    // L1: in-memory cache
+    if (resultCache.has(jobId)) {
+      console.log(`[getResult] ⚡ L1 hit for ${jobId}`);
+      return resultCache.get(jobId)!;
+    }
 
-      console.log(`[getResult] fetching job=${jobId}`);
-      const response = await fetch(`${API_BASE}/story/result/${jobId}`);
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`Failed to get result: ${response.status} ${text}`);
-      }
-      const scene: Scene = await response.json();
-      
-      // Cache it for future reference (e.g. going back)
-      resultCache.set(jobId, scene);
+    // L2: IndexedDB cache
+    const idbScene = await storyCache.loadScene(jobId);
+    if (idbScene) {
+      resultCache.set(jobId, idbScene); // warm L1 from L2
+      return idbScene;
+    }
 
-      const audioB64 = scene.narration_audio_b64 ?? '';
-      const audioBytes = audioB64
-        ? Math.floor((audioB64.length * 3) / 4) - (audioB64.endsWith('==') ? 2 : audioB64.endsWith('=') ? 1 : 0)
-        : 0;
-      console.log(
-        `[getResult] job=${jobId}  step=${scene.step_number}  ` +
-        `audio=${audioBytes > 0 ? `${audioBytes.toLocaleString()} bytes` : 'EMPTY'}  ` +
-        `image=${scene.illustration_b64 ? 'present' : 'EMPTY'}  ` +
-        `choices=${scene.choices.length}`
-      );
-      return scene;
+    console.log(`[getResult] fetching job=${jobId}`);
+    const response = await fetch(`${API_BASE}/story/result/${jobId}`);
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Failed to get result: ${response.status} ${text}`);
+    }
+    const scene: Scene = await response.json();
+
+    // Write-through to both L1 and L2
+    resultCache.set(jobId, scene);
+    storyCache.saveScene(jobId, scene).catch(() => { });
+
+    const audioB64 = scene.narration_audio_b64 ?? '';
+    const audioBytes = audioB64
+      ? Math.floor((audioB64.length * 3) / 4) - (audioB64.endsWith('==') ? 2 : audioB64.endsWith('=') ? 1 : 0)
+      : 0;
+    console.log(
+      `[getResult] job=${jobId}  step=${scene.step_number}  ` +
+      `audio=${audioBytes > 0 ? `${audioBytes.toLocaleString()} bytes` : 'EMPTY'}  ` +
+      `image=${scene.illustration_b64 ? 'present' : 'EMPTY'}  ` +
+      `choices=${scene.choices.length}`
+    );
+    return scene;
   },
 
   // ── NEW: Helper methods for Preloading ────────────────────────────────────
-  
+
   isResultCached(jobId: string): boolean {
     return resultCache.has(jobId);
   },
@@ -139,7 +148,7 @@ export const storyService = {
    * This is called by App.tsx in a background loop.
    */
   async checkAndCache(jobId: string): Promise<void> {
-    if (resultCache.has(jobId)) return; // Already got it
+    if (resultCache.has(jobId)) return; // Already in L1
 
     try {
       const statusRes = await fetch(`${API_BASE}/story/status/${jobId}`);
@@ -147,15 +156,52 @@ export const storyService = {
       const statusData = await statusRes.json();
 
       if (statusData.status === 'complete') {
-         // It's ready! Download payload silently.
-         console.log(`[checkAndCache] Job ${jobId} is ready. Downloading...`);
-         await this.getResult(jobId); // getResult auto-caches
+        // It's ready! Download payload silently (getResult handles L1+L2 write-through).
+        console.log(`[checkAndCache] Job ${jobId} is ready. Downloading...`);
+        await this.getResult(jobId);
       }
     } catch (e) {
       // Silent fail for background tasks
     }
   },
   // ──────────────────────────────────────────────────────────────────────────
+
+  // ── IDB-backed session / prefired helpers ─────────────────────────────────
+
+  saveSession(sessionId: string, jobId: string): Promise<void> {
+    return storyCache.saveSession(sessionId, jobId);
+  },
+
+  loadSession(): Promise<{ sessionId: string; jobId: string } | null> {
+    return storyCache.loadSession();
+  },
+
+  savePrefired(sessionId: string, jobs: PrefiredJob[]): Promise<void> {
+    return storyCache.savePrefired(sessionId, jobs);
+  },
+
+  loadPrefired(sessionId: string): Promise<PrefiredJob[] | null> {
+    return storyCache.loadPrefired(sessionId);
+  },
+
+    /** Clear all IDB stores (called when user starts a fresh story). */
+    clearCache(): Promise<void> {
+      return storyCache.clearAll();
+    },
+
+    /** Remove stale entries from IDB (called at app startup). */
+    clearOldEntries(): Promise<void> {
+      return storyCache.clearOldEntries();
+    },
+
+    saveConfig(config: StoryConfig): Promise<void> {
+        return storyCache.saveConfig(config);
+    },
+
+    loadConfig(): Promise<StoryConfig | null> {
+        return storyCache.loadConfig();
+    },
+    // ── Housekeeping ───────────────────────────────────────────────────────────
 
   async debugStt(jobId: string, audiob64: string, storyText: string): Promise<void> {
     try {
@@ -169,15 +215,15 @@ export const storyService = {
         return;
       }
       const data = await resp.json();
-        if (data.skipped) {
-          console.log(`[debugStt] job=${jobId}  ⏭ SKIPPED — ${data.reason}`);
-          return;
-        }
-        const match = data.match ? '✅ MATCH' : '❌ MISMATCH';
-        console.group(`[debugStt] job=${jobId}  ${match}  overlap=${data.word_overlap_pct}%`);
-        console.log('STORY_TEXT :', data.story_text_preview);
-        console.log('TRANSCRIPT :', data.transcript);
-        console.groupEnd();
+      if (data.skipped) {
+        console.log(`[debugStt] job=${jobId}  ⏭ SKIPPED — ${data.reason}`);
+        return;
+      }
+      const match = data.match ? '✅ MATCH' : '❌ MISMATCH';
+      console.group(`[debugStt] job=${jobId}  ${match}  overlap=${data.word_overlap_pct}%`);
+      console.log('STORY_TEXT :', data.story_text_preview);
+      console.log('TRANSCRIPT :', data.transcript);
+      console.groupEnd();
     } catch (e) {
       console.warn('[debugStt] failed:', e);
     }
