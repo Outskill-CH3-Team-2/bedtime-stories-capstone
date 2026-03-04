@@ -11,10 +11,10 @@
  * Entries automatically expire after MAX_AGE_MS (24 h).
  */
 
-import { Scene, PrefiredJob } from '../types';
+import { Scene, PrefiredJob, StoryConfig } from '../types';
 
 const DB_NAME = 'dreamweaver-cache';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // Incremented version to add config store
 const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 // ── Internal types ────────────────────────────────────────────────────────────
@@ -34,6 +34,12 @@ interface SessionRecord {
 interface PrefiredRecord {
     sessionId: string;
     jobs: PrefiredJob[];
+    savedAt: number;
+}
+
+interface ConfigRecord {
+    id: 'story_config';
+    config: StoryConfig;
     savedAt: number;
 }
 
@@ -58,6 +64,9 @@ function openDB(): Promise<IDBDatabase> {
             }
             if (!db.objectStoreNames.contains('prefired')) {
                 db.createObjectStore('prefired', { keyPath: 'sessionId' });
+            }
+            if (!db.objectStoreNames.contains('config')) {
+                db.createObjectStore('config', { keyPath: 'id' });
             }
         };
 
@@ -229,6 +238,30 @@ export const storyCache = {
             return record.jobs;
         } catch (e) {
             console.warn('[storyCache] loadPrefired failed:', e);
+            return null;
+        }
+    },
+
+    // ── Config ────────────────────────────────────────────────────────────────────
+
+    async saveConfig(config: StoryConfig): Promise<void> {
+        try {
+            const record: ConfigRecord = { id: 'story_config', config, savedAt: Date.now() };
+            await idbPut('config', record);
+            console.log('[storyCache] 💾 Saved story configuration');
+        } catch (e) {
+            console.warn('[storyCache] saveConfig failed:', e);
+        }
+    },
+
+    async loadConfig(): Promise<StoryConfig | null> {
+        try {
+            const record = await idbGet<ConfigRecord>('config', 'story_config');
+            if (!record) return null;
+            // Config usually doesn't expire like scenes do, but we could check if needed.
+            return record.config;
+        } catch (e) {
+            console.warn('[storyCache] loadConfig failed:', e);
             return null;
         }
     },

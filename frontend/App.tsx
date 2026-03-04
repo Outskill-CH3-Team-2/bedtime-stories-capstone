@@ -165,6 +165,13 @@ const App: React.FC = () => {
   // Prune stale IDB entries on startup
   useEffect(() => {
     storyService.clearOldEntries().catch(() => { });
+    // Load config from IDB
+    storyService.loadConfig().then((loaded) => {
+      if (loaded) {
+        console.log('[App] Loaded saved configuration from IDB');
+        setConfig(loaded);
+      }
+    }).catch(() => { });
   }, []);
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -464,6 +471,7 @@ const App: React.FC = () => {
           config={config}
           onSave={(newConfig) => {
             setConfig(newConfig);
+            storyService.saveConfig(newConfig).catch(() => { });
             setShowConfig(false);
           }}
           onClose={() => setShowConfig(false)}
