@@ -1,4 +1,4 @@
-import { Scene, PrefiredJob } from '../types';
+import { Scene, PrefiredJob, StoryConfig } from '../types';
 import { storyCache } from './storyCache';
 
 const API_BASE = 'http://localhost:8000';
@@ -184,16 +184,24 @@ export const storyService = {
     return storyCache.loadPrefired(sessionId);
   },
 
-  /** Clear all IDB stores (called when user starts a fresh story). */
-  clearCache(): Promise<void> {
-    return storyCache.clearAll();
-  },
+    /** Clear all IDB stores (called when user starts a fresh story). */
+    clearCache(): Promise<void> {
+      return storyCache.clearAll();
+    },
 
-  /** Remove stale entries from IDB (called at app startup). */
-  clearOldEntries(): Promise<void> {
-    return storyCache.clearOldEntries();
-  },
-  // ──────────────────────────────────────────────────────────────────────────
+    /** Remove stale entries from IDB (called at app startup). */
+    clearOldEntries(): Promise<void> {
+      return storyCache.clearOldEntries();
+    },
+
+    saveConfig(config: StoryConfig): Promise<void> {
+        return storyCache.saveConfig(config);
+    },
+
+    loadConfig(): Promise<StoryConfig | null> {
+        return storyCache.loadConfig();
+    },
+    // ── Housekeeping ───────────────────────────────────────────────────────────
 
   async debugStt(jobId: string, audiob64: string, storyText: string): Promise<void> {
     try {
