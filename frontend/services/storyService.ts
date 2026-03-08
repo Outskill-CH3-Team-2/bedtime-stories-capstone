@@ -1,11 +1,34 @@
 import { Scene, PrefiredJob, StoryConfig } from '../types';
-import { storyCache } from './storyCache';
+import { storyCache, deleteDb } from './storyCache';
 
 const API_BASE = 'http://localhost:8000';
 
-// ── NEW: In-memory cache for background results ─────────────────────────────
+// ── Dev overrides (from .env) ─────────────────────────────────────────────────
+// VITE_DELETE_DB=true  → wipe IDB on startup (simulates first-run)
+// VITE_TEST_IMAGE=xxx  → path under /public/ used for every illustration
+// VITE_TEST_AUDIO=xxx  → path under /public/ used for every narration audio
+const _DELETE_DB   = import.meta.env.VITE_DELETE_DB  === 'true';
+const _TEST_IMAGE  = (import.meta.env.VITE_TEST_IMAGE  || '').trim();
+const _TEST_AUDIO  = (import.meta.env.VITE_TEST_AUDIO  || '').trim();
+
+// Perform DB wipe immediately at module load time if requested
+if (_DELETE_DB) {
+  deleteDb().catch(() => {});
+}
+
+/** Fetch a public asset and return it as base64 (no data-URI prefix). */
+async function _publicFileToB64(path: string): Promise<string> {
+  const resp = await fetch(`/${path}`);
+  if (!resp.ok) throw new Error(`Failed to fetch test file: ${path}`);
+  const buf = await resp.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+// ── In-memory cache for background results ────────────────────────────────────
 const resultCache = new Map<string, Scene>();
-// ────────────────────────────────────────────────────────────────────────────
 
 export const storyService = {
   /**
@@ -114,11 +137,27 @@ export const storyService = {
       const text = await response.text();
       throw new Error(`Failed to get result: ${response.status} ${text}`);
     }
-    const scene: Scene = await response.json();
+    let scene: Scene = await response.json();
 
-    // Write-through to both L1 and L2
-    resultCache.set(jobId, scene);
-    storyCache.saveScene(jobId, scene).catch(() => { });
+    // ── Dev overrides ──────────────────────────────────────────────────────
+    if (_TEST_IMAGE.length > 0 || _TEST_AUDIO.length > 0) {
+      const [imgB64, audB64] = await Promise.all([
+        _TEST_IMAGE.length > 0 ? _publicFileToB64(_TEST_IMAGE).catch(() => scene.illustration_b64) : Promise.resolve(scene.illustration_b64),
+        _TEST_AUDIO.length > 0 ? _publicFileToB64(_TEST_AUDIO).catch(() => scene.narration_audio_b64) : Promise.resolve(scene.narration_audio_b64),
+      ]);
+      scene = { ...scene, illustration_b64: imgB64, narration_audio_b64: audB64 };
+      console.log(`[getResult] DEV: applied test overrides  image=${!!_TEST_IMAGE}  audio=${!!_TEST_AUDIO}`);
+    }
+    // ──────────────────────────────────────────────────────────────────────
+
+      // Write-through to L1 always; only write L2 if media is present
+      // (avoids caching skeleton scenes produced while test-skip flags were active)
+      resultCache.set(jobId, scene);
+      if (scene.illustration_b64 && scene.narration_audio_b64) {
+        storyCache.saveScene(jobId, scene).catch(() => { });
+      } else {
+        console.log(`[getResult] Skipping IDB write for job=${jobId} — media incomplete (illustration=${!!scene.illustration_b64} audio=${!!scene.narration_audio_b64})`);
+      }
 
     const audioB64 = scene.narration_audio_b64 ?? '';
     const audioBytes = audioB64

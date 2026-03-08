@@ -1,14 +1,18 @@
 /**
  * storyCache.ts
- * ─────────────────────────────────────────────────────────────────
+ * ─────────────────────────────────────────────────────────────
  * IndexedDB wrapper for Dream Weaver.
  *
  * Object stores
  *   scenes   — keyed by jobId, stores {scene, savedAt}
  *   sessions — keyed by sessionId, stores active session pointer
  *   prefired — keyed by sessionId, stores PrefiredJob[]
+ *   config   — single record keyed 'story_config'
  *
  * Entries automatically expire after MAX_AGE_MS (24 h).
+ *
+ * Dev: set VITE_DELETE_DB=true in .env to wipe all stores on startup
+ * (simulates a clean first-run without touching config permanently).
  */
 
 import { Scene, PrefiredJob, StoryConfig } from '../types';
@@ -83,6 +87,33 @@ function openDB(): Promise<IDBDatabase> {
     });
 
     return dbPromise;
+}
+
+/**
+ * Delete and re-create the entire database.
+ * Called at startup when VITE_DELETE_DB=true.
+ */
+export async function deleteDb(): Promise<void> {
+    // Close any open connection first
+    if (dbPromise) {
+        try {
+            const db = await dbPromise;
+            db.close();
+        } catch { /* ignore */ }
+        dbPromise = null;
+    }
+    await new Promise<void>((resolve, reject) => {
+        const req = indexedDB.deleteDatabase(DB_NAME);
+        req.onsuccess = () => {
+            console.log('[storyCache] IDB deleted (VITE_DELETE_DB=true)');
+            resolve();
+        };
+        req.onerror = () => reject(req.error);
+        req.onblocked = () => {
+            console.warn('[storyCache] IDB delete blocked — close other tabs and reload');
+            resolve(); // proceed anyway
+        };
+    });
 }
 
 // ── Generic helpers ───────────────────────────────────────────────────────────
