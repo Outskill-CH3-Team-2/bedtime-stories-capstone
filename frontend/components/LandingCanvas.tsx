@@ -8,7 +8,7 @@ interface Particle {
     speedY: number;
     drift: number;
     phase: number;
-    tier: 'dust' | 'sparkle'; // dust = soft circle, sparkle = 4-point star
+    tier: 'dust' | 'sparkle';
     rotation: number;
     rotationSpeed: number;
 }
@@ -51,7 +51,6 @@ function createSparkle(width: number, height: number): Particle {
     };
 }
 
-/** Draw a 4-point star centred at (cx, cy) with given outer radius. */
 function drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, outerR: number, rotation: number, opacity: number) {
     const innerR = outerR * 0.35;
     const pts = 4;
@@ -77,64 +76,35 @@ function drawStar(ctx: CanvasRenderingContext2D, cx: number, cy: number, outerR:
 
 const LandingCanvas: React.FC<LandingCanvasProps> = ({ paused }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const pausedRef = useRef(paused);
     const rafRef = useRef<number | null>(null);
     const particlesRef = useRef<Particle[]>([]);
+    const tRef = useRef(0);
+    // Stable references shared between setup and paused-watcher effects
+    const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
 
-    useEffect(() => { pausedRef.current = paused; }, [paused]);
-
-    useEffect(() => {
-        const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        const isMobile = window.innerWidth < MOBILE_BREAKPOINT;
-        if (prefersReduced || isMobile) return;
-
+    const startLoop = () => {
         const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        const resize = () => {
-            canvas.width = window.innerWidth;
-            canvas.height = window.innerHeight;
-        };
-        resize();
-        window.addEventListener('resize', resize);
-
-        particlesRef.current = [
-            ...Array.from({ length: DUST_COUNT }, () => createDust(canvas.width, canvas.height)),
-            ...Array.from({ length: SPARKLE_COUNT }, () => createSparkle(canvas.width, canvas.height)),
-        ];
-
-        let t = 0;
+        const ctx = ctxRef.current;
+        if (!canvas || !ctx) return;
 
         const draw = () => {
-            rafRef.current = requestAnimationFrame(draw);
-            if (!canvas || !ctx) return;
             ctx.clearRect(0, 0, canvas.width, canvas.height);
-            if (pausedRef.current) return;
-
-            t += 0.008;
+            tRef.current += 0.008;
+            const t = tRef.current;
 
             for (const p of particlesRef.current) {
                 const maxOpacity = p.tier === 'sparkle' ? 0.35 : 0.25;
                 p.opacity = (maxOpacity * 0.5) + (maxOpacity * 0.5) * Math.sin(t + p.phase);
-
                 p.y -= p.speedY;
                 p.x += p.drift;
                 if (p.tier === 'sparkle') p.rotation += p.rotationSpeed;
-
-                // Wrap
-                if (p.y < -12) {
-                    p.y = canvas.height + 12;
-                    p.x = Math.random() * canvas.width;
-                }
+                if (p.y < -12) { p.y = canvas.height + 12; p.x = Math.random() * canvas.width; }
                 if (p.x < 0) p.x = canvas.width;
                 if (p.x > canvas.width) p.x = 0;
 
                 if (p.tier === 'sparkle') {
                     drawStar(ctx, p.x, p.y, p.size * 2.2, p.rotation, p.opacity);
                 } else {
-                    // Soft radial dust circle
                     const gradient = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.size * 2);
                     gradient.addColorStop(0, `rgba(255, 255, 255, ${p.opacity})`);
                     gradient.addColorStop(0.5, `rgba(230, 240, 255, ${p.opacity * 0.5})`);
@@ -145,15 +115,62 @@ const LandingCanvas: React.FC<LandingCanvasProps> = ({ paused }) => {
                     ctx.fill();
                 }
             }
+            rafRef.current = requestAnimationFrame(draw);
         };
 
-        draw();
+        rafRef.current = requestAnimationFrame(draw);
+    };
+
+    const stopLoop = () => {
+        if (rafRef.current !== null) {
+            cancelAnimationFrame(rafRef.current);
+            rafRef.current = null;
+        }
+    };
+
+    // One-time setup: create canvas, particles, start loop
+    useEffect(() => {
+        const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const isMobile = window.innerWidth < MOBILE_BREAKPOINT;
+        if (prefersReduced || isMobile) return;
+
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctxRef.current = ctx;
+
+        const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+        resize();
+        window.addEventListener('resize', resize);
+
+        particlesRef.current = [
+            ...Array.from({ length: DUST_COUNT }, () => createDust(canvas.width, canvas.height)),
+            ...Array.from({ length: SPARKLE_COUNT }, () => createSparkle(canvas.width, canvas.height)),
+        ];
+
+        if (!paused) startLoop();
 
         return () => {
             window.removeEventListener('resize', resize);
-            if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+            stopLoop();
         };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // Respond to pause/resume — start or stop the RAF loop
+    useEffect(() => {
+        if (paused) {
+            stopLoop();
+            // Clear canvas so stale frame doesn't sit frozen on screen
+            const canvas = canvasRef.current;
+            const ctx = ctxRef.current;
+            if (canvas && ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+        } else {
+            if (rafRef.current === null) startLoop();
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [paused]);
 
     return (
         <canvas

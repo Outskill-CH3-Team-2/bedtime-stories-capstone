@@ -99,7 +99,10 @@ async def run_pipeline_task(job_id: str, session_id: str, choice_text: str = "")
     # Append this branch's choice to the snapshot (not the live session)
     if choice_text:
         state_snapshot.step_number += 1
-        state_snapshot.messages.append({"role": "user", "content": choice_text})
+        state_snapshot.messages.append({
+            "role": "user",
+            "content": f"[Scene {state_snapshot.step_number}] {choice_text}",
+        })
 
     try:
         scene_result = await process_scene(state_snapshot)
@@ -262,6 +265,7 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
         state = StoryState(
             config=safe_config,
             story_idea=request.story_idea,
+            messages=[{"role": "user", "content": f"The story idea is: {request.story_idea}"}],
         )
 
         # Register protagonist: server-loaded image > request payload > nothing
@@ -295,15 +299,22 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
 
         # If the caller tells us which job was selected in the previous round,
         # commit that branch's history to the live session now.
-        if request.prev_job_id:
+        # Guard against duplicate commits — every prefire call in a round sends
+        # the same prev_job_id, so only the first one actually writes.
+        if request.prev_job_id and request.prev_job_id != state.last_committed_job_id:
             prev_job = job_store.get(request.prev_job_id)
             if prev_job and prev_job.status == StoryStatus.COMPLETE and prev_job.raw_text:
                 # Commit: user choice + assistant response from the selected job
                 state.step_number += 1
-                state.messages.append({"role": "user", "content": request.prev_choice_text or ""})
+                state.messages.append({"role": "user", "content": f"[Scene {state.step_number}] {request.prev_choice_text or ''}"})
                 state.messages.append({"role": "assistant", "content": prev_job.raw_text})
+                state.last_committed_job_id = request.prev_job_id
                 session_store.set(state.session_id, state)
                 print(f"[API] Committed job {request.prev_job_id} history to session {state.session_id} step={state.step_number}")
+            elif prev_job and prev_job.status == StoryStatus.COMPLETE and not prev_job.raw_text:
+                print(f"[API] prev_job {request.prev_job_id} has no raw_text — history not committed")
+        elif request.prev_job_id and request.prev_job_id == state.last_committed_job_id:
+            print(f"[API] Skipping duplicate commit of job {request.prev_job_id} for session {state.session_id}")
 
     # ── Create job and fire ────────────────────────────────────────────────
     job = job_store.create(state.session_id)

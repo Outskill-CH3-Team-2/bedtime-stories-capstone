@@ -158,54 +158,61 @@ async def node_retry_text(state: PipelineState) -> dict:
 async def node_generate_media(state: PipelineState) -> dict:
     """
     Stage 3: Parallel media generation using asyncio.gather.
+    Skips TTS and/or image generation when the corresponding VITE_TEST_*
+    env vars are set — the frontend will substitute local test assets instead,
+    saving API costs during development.
     """
     ss: StoryState = state["story_state"]
     ss.status = StoryStatus.GENERATING_MEDIA
 
     narrative = state["narrative"]
-    choices_raw = state["choices_raw"]
     voice = ss.config.voice
+
+    skip_audio = bool(os.getenv("VITE_TEST_AUDIO", "").strip())
+    skip_image = bool(os.getenv("VITE_TEST_IMAGE", "").strip())
 
     # Strip choice-question lines before TTS — the LLM sometimes appends
     # "Where should Arlo go? / Should he..." directly into the narrative prose,
     # which causes the narrator to read the option text aloud.
     tts_narrative = _narrative_for_tts(narrative)
 
-    # Collect character refs from session: protagonist first, then side characters.
-    # Protagonist always goes first so the model prompt attribution is consistent.
-    characters = sorted(
-        ss.characters.values(),
-        key=lambda c: (0 if c.role == "protagonist" else 1, c.name),
-    )
-
-    # Create all tasks up front
-    # 1. Narration — use tts_narrative (choice-question lines stripped)
-    narration_audio_task = asyncio.create_task(
-        generate_audio(tts_narrative, voice=voice)
-    )
-    # 2. Main Illustration — pass character refs, not a raw b64 string
-    main_image_task = asyncio.create_task(
-        generate_image(narrative, characters=characters or None)
-    )
-    
-    # We skip choice media for this iteration to save tokens/time, 
-    # but the logic remains if needed later.
-    choice_audio_tasks = []
-    choice_image_tasks = []
-
     print(
         f"[pipeline] Generating media  job={ss.job_id}  session={ss.session_id}  step={ss.step_number}\n"
+        f"  skip_audio={skip_audio}  skip_image={skip_image}\n"
         f"  narrative(120)    : {narrative[:120]!r}\n"
         f"  tts_narrative(120): {tts_narrative[:120]!r}"
     )
 
-    # Fire all simultaneously
-    await asyncio.gather(
-        *([narration_audio_task, main_image_task] + choice_audio_tasks + choice_image_tasks),
-        return_exceptions=True,
-    )
+    # Build only the tasks we actually need
+    narration_audio_task: Optional[asyncio.Task] = None
+    main_image_task: Optional[asyncio.Task] = None
 
-    def _safe(task: asyncio.Task, label: str, default: bytes = b"") -> bytes:
+    if skip_audio:
+        print(f"[pipeline] SKIPPING TTS GENERATION (VITE_TEST_AUDIO is set)")
+    else:
+        narration_audio_task = asyncio.create_task(
+            generate_audio(tts_narrative, voice=voice)
+        )
+
+    if skip_image:
+        print(f"[pipeline] SKIPPING IMAGE GENERATION (VITE_TEST_IMAGE is set)")
+    else:
+        # Collect character refs: protagonist first, then side characters.
+        characters = sorted(
+            ss.characters.values(),
+            key=lambda c: (0 if c.role == "protagonist" else 1, c.name),
+        )
+        main_image_task = asyncio.create_task(
+            generate_image(narrative, characters=characters or None)
+        )
+
+    active_tasks = [t for t in (narration_audio_task, main_image_task) if t is not None]
+    if active_tasks:
+        await asyncio.gather(*active_tasks, return_exceptions=True)
+
+    def _safe(task: Optional[asyncio.Task], label: str, default: bytes = b"") -> bytes:
+        if task is None:
+            return default
         if task.cancelled():
             print(f"[pipeline] job={ss.job_id} {label} task was CANCELLED")
             return default

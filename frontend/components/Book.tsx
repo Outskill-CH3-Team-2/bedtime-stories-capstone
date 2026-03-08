@@ -10,6 +10,7 @@ interface BookProps {
   scene: Scene;
   onChoice: (choice: Choice) => void;
   isGenerating: boolean;
+  choicesReady?: boolean;
   appTitle?: string;
   audioRef?: React.MutableRefObject<HTMLAudioElement | null>;
 }
@@ -18,6 +19,7 @@ const Book: React.FC<BookProps> = ({
   scene,
   onChoice,
   isGenerating,
+  choicesReady = false,
   appTitle = 'Dream Weaver',
   audioRef: audioRefProp,
 }) => {
@@ -349,30 +351,35 @@ const Book: React.FC<BookProps> = ({
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3%' }}>
-              {scene.choices.map(c => (
-                <button
-                  key={c.id}
-                  disabled={isGenerating}
-                  onClick={() => {
-                    const audio = audioRef.current;
-                    if (audio) { audio.pause(); }
-                    onChoice(c);
-                  }}
-                  style={{
-                    width: '100%', textAlign: 'left',
-                    padding: '3% 4%', background: 'transparent',
-                    border: '1px solid rgba(139,69,19,0.28)', borderRadius: 2,
-                    fontFamily: "'Crimson Text', serif",
-                    fontSize: 'clamp(10px, 1vw, 13px)', color: '#2c1810',
-                    cursor: isGenerating ? 'not-allowed' : 'pointer',
-                    display: 'flex', alignItems: 'center', gap: '4%',
-                    opacity: isGenerating ? 0.4 : 1, transition: 'opacity 0.2s',
-                  }}
-                >
-                  <span style={{ color: 'rgba(139,69,19,0.45)', fontSize: '0.85em', flexShrink: 0 }}>❧</span>
-                  <span style={{ flex: 1 }}>{c.text}</span>
-                </button>
-              ))}
+              {scene.choices.map(c => {
+                const disabled = isGenerating || !choicesReady;
+                return (
+                  <button
+                    key={c.id}
+                    disabled={disabled}
+                    onClick={() => {
+                      const audio = audioRef.current;
+                      if (audio) { audio.pause(); }
+                      onChoice(c);
+                    }}
+                    style={{
+                      width: '100%', textAlign: 'left',
+                      padding: '3% 4%', background: 'transparent',
+                      border: `1px solid ${disabled ? 'rgba(139,69,19,0.15)' : 'rgba(139,69,19,0.28)'}`, borderRadius: 2,
+                      fontFamily: "'Crimson Text', serif",
+                      fontSize: 'clamp(10px, 1vw, 13px)', color: '#2c1810',
+                      cursor: disabled ? 'not-allowed' : 'pointer',
+                      display: 'flex', alignItems: 'center', gap: '4%',
+                      opacity: disabled ? 0.35 : 1, transition: 'opacity 0.3s',
+                    }}
+                  >
+                    <span style={{ color: 'rgba(139,69,19,0.45)', fontSize: '0.85em', flexShrink: 0 }}>
+                      {!choicesReady && !isGenerating ? '…' : '❧'}
+                    </span>
+                    <span style={{ flex: 1 }}>{c.text}</span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
@@ -424,7 +431,7 @@ const Book: React.FC<BookProps> = ({
         )}
       </div>
 
-      {isGenerating && (
+      {(isGenerating || (!choicesReady && !isGenerating && scene.choices.length > 0)) && (
         <div style={{
           position: 'absolute', top: '10.5%', right: '10%',
           display: 'flex', alignItems: 'center', gap: 6, zIndex: 10,
@@ -433,7 +440,7 @@ const Book: React.FC<BookProps> = ({
           <span style={{
             fontFamily: "'Cinzel',serif", fontSize: 9, color: '#8b4513',
             letterSpacing: '0.2em', textTransform: 'uppercase',
-          }}>Writing…</span>
+          }}>{isGenerating ? 'Writing…' : 'Preparing…'}</span>
         </div>
       )}
     </div>
