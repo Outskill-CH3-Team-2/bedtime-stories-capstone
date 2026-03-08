@@ -127,6 +127,8 @@ const App: React.FC = () => {
   const [showConfig, setShowConfig] = useState(false);
   const [config, setConfig] = useState<StoryConfig>(DEFAULT_CONFIG);
   const [animPaused, setAnimPaused] = useState(false);
+  // true only when every prefired job for the current scene is downloaded & cached
+  const [choicesReady, setChoicesReady] = useState(false);
 
   const [state, setState] = useState<StoryState>({
     sessionId: null,
@@ -149,29 +151,41 @@ const App: React.FC = () => {
     }
   };
 
-  // Background Poller
+  // Background Poller — downloads prefired results and tracks when all are ready
   useEffect(() => {
     const backgroundInterval = setInterval(() => {
-      prefiredJobsRef.current.forEach((job) => {
+      const jobs: PrefiredJob[] = Array.from(prefiredJobsRef.current.values()) as PrefiredJob[];
+      if (jobs.length === 0) return;
+
+      jobs.forEach((job) => {
         if (!storyService.isResultCached(job.jobId)) {
           storyService.checkAndCache(job.jobId).catch(() => { });
         }
       });
+
+      // Enable choices only when EVERY prefired job is in cache
+      const allReady = jobs.every((job) => storyService.isResultCached(job.jobId));
+      setChoicesReady(allReady);
     }, 2000);
 
     return () => clearInterval(backgroundInterval);
   }, []);
 
-  // Prune stale IDB entries on startup
+  // Prune stale IDB entries on startup; open config screen if no saved config
   useEffect(() => {
     storyService.clearOldEntries().catch(() => { });
-    // Load config from IDB
     storyService.loadConfig().then((loaded) => {
-      if (loaded) {
+      if (loaded && loaded.childName) {
         console.log('[App] Loaded saved configuration from IDB');
         setConfig(loaded);
+      } else {
+        console.log('[App] No saved config found — opening configuration screen');
+        setShowConfig(true);
       }
-    }).catch(() => { });
+    }).catch(() => {
+      // IDB unavailable — open config so user can fill in details
+      setShowConfig(true);
+    });
   }, []);
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -182,25 +196,29 @@ const App: React.FC = () => {
     if (!choices.length) return;
 
     prefiredJobsRef.current.clear();
+    setChoicesReady(false); // lock buttons until all prefired jobs are downloaded
     const prevSelected = selectedJobRef.current;
     selectedJobRef.current = null;
 
-    for (let i = 0; i < choices.length; i++) {
-      const choice = choices[i];
+    // Fire all choices in parallel — pass prevSelected to EVERY request so the
+    // backend commits the selected branch's history regardless of which request
+    // the server processes first (the backend deduplicates via last_committed_job_id).
+    const promises = choices.map(async (choice) => {
       try {
-        const isFirst = i === 0;
         const job = await storyService.pregenerateNextChapter(
           sessionId,
           choice.text,
-          isFirst ? prevSelected?.jobId : undefined,
-          isFirst ? prevSelected?.choiceText : undefined,
+          prevSelected?.jobId,
+          prevSelected?.choiceText,
         );
         prefiredJobsRef.current.set(choice.text, job);
         console.log(`[App] Pre-fired job ${job.jobId} for choice: "${choice.text.slice(0, 40)}"`);
       } catch (err: any) {
         console.error(`[App] Failed to pre-fire job for choice "${choice.text}":`, err);
       }
-    }
+    });
+
+    await Promise.all(promises);
 
     // Persist prefired jobs so IDB can serve them across refresh
     const allJobs = Array.from(prefiredJobsRef.current.values()) as PrefiredJob[];
@@ -489,6 +507,7 @@ const App: React.FC = () => {
             scene={displayScene!}
             onChoice={handleChoice}
             isGenerating={isGenerating}
+            choicesReady={choicesReady}
             appTitle={APP_TITLE}
           />
         </div>

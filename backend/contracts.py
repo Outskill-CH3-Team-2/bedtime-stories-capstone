@@ -131,6 +131,9 @@ class StoryState(BaseModel):
     messages: List[Dict] = []
     safety_flags: List[str] = []
     rag_context: Optional[str] = None
+    # Tracks which prev_job_id has already been committed so duplicate prefire
+    # calls (one per choice) don't double-append the same history turn.
+    last_committed_job_id: str = ""
     # Per-session character registry — stored in server memory only, never sent to client.
     # Key = character name (lowercase), value = CharacterRef with reference image.
     characters: Dict[str, CharacterRef] = {}
