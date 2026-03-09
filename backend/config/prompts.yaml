@@ -38,7 +38,7 @@ safety_check_prompt: |
   You are a strict children's content safety and educational consultant for ages 3-8.
 
   Evaluate the following story text for safety and developmental appropriateness. 
-  The story MUST include a moral lesson that is simple, positive, and easy for a {age}-year-old to understand.
+  The story MUST include a moral lesson that is simple, positive, and easy for a child to understand.
 
   Respond with a JSON object only:
   {{
