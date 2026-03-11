@@ -33,6 +33,13 @@ def build_prompt(config: ChildConfig, messages: list[dict], step_number: int, st
         details=details
     )
 
+    # 1b. Permanently anchor the story idea in the system prompt on every turn.
+    #     The system prompt has the highest priority for the model, so this keeps
+    #     the theme alive even in long conversations.
+    if story_idea:
+        system_text += f"\n\n**CORE STORY THEME:** {story_idea}\n"
+        system_text += "You must ensure every scene advances this specific plot idea."
+
     # 2. RAG context injection
     if rag_context:
         system_text += "\n\n" + prompts["rag_injection"].format(rag_context=rag_context)
@@ -46,13 +53,10 @@ def build_prompt(config: ChildConfig, messages: list[dict], step_number: int, st
     msgs = [{"role": "system", "content": system_text}]
     msgs.extend(messages)
 
-    # 4. Inject the "Story Idea" if this is the very first turn (no history)
-    if not messages:
-        msgs.append({
-            "role": "user", 
-            "content": f"Let's start the story! The idea is: '{story_idea}'. Set the scene."
-        })
-
+    print(
+        f"[build_prompt] step={step_number}  idea={story_idea!r:.60}  "
+        f"history_turns={len(messages)}  total_msgs={len(msgs)}"
+    )
     return msgs
 
 async def generate_text(messages: list[dict]) -> str:
@@ -70,6 +74,26 @@ async def generate_text(messages: list[dict]) -> str:
         print(f"Text Gen Error: {e}")
         return "The story is taking a nap... [Try again]"
 
+def _ascii_sanitise(text: str) -> str:
+    """Replace common Unicode typographic characters with plain ASCII equivalents."""
+    replacements = {
+        "\u2014": "--",   # em dash
+        "\u2013": "-",    # en dash
+        "\u2018": "'",    # left single quotation mark
+        "\u2019": "'",    # right single quotation mark / apostrophe
+        "\u201c": '"',    # left double quotation mark
+        "\u201d": '"',    # right double quotation mark
+        "\u2026": "...",  # ellipsis
+        "\u00e2\u20ac\u201c": "--",  # mangled em dash (UTF-8 decoded as Latin-1)
+        "\u2022": "-",    # bullet
+        "\u00a0": " ",    # non-breaking space
+        "\u2019": "'",    # right apostrophe (duplicate key kept for safety)
+    }
+    for char, replacement in replacements.items():
+        text = text.replace(char, replacement)
+    return text
+
+
 def parse_response(text: str):
     """
     Extract (narrative, choices) from the raw LLM output.
@@ -83,11 +107,13 @@ def parse_response(text: str):
 
     Strategy
     --------
-    1. Try to extract choices from ANY bracket style.
-    2. If that fails, try numbered lists.
-    3. Strip every extracted choice line from the narrative before returning.
+    1. Sanitise Unicode typographic characters to ASCII equivalents.
+    2. Try to extract choices from ANY bracket style.
+    3. If that fails, try numbered lists.
+    4. Strip every extracted choice line from the narrative before returning.
     """
     import re
+    text = _ascii_sanitise(text)
 
     # ── 1. Bracket-based extraction ──────────────────────────────────────────
     # Matches:
