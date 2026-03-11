@@ -1,8 +1,17 @@
 import io
 import os
 import base64
+import uuid
+import json
+import logging
+import shutil
+import threading
+from pathlib import Path
+from datetime import datetime, timezone
+from typing import Any, Optional, Annotated
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File, Depends
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel as _BaseModel
 from backend.contracts import (
@@ -16,14 +25,52 @@ from backend.session_store import session_store, job_store
 from backend.safety.filters import sanitize_input
 from utils.download_assets import download_if_missing
 
+try:
+    import numpy as np
+    import fitz  # PyMuPDF
+    import faiss
+    import ebooklib
+    from ebooklib import epub
+    from bs4 import BeautifulSoup
+    from sentence_transformers import SentenceTransformer
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import HumanMessage, SystemMessage
+    _RAG_IMPORT_ERROR: Exception | None = None
+except Exception as e:
+    np = None  # type: ignore[assignment]
+    fitz = None  # type: ignore[assignment]
+    faiss = None  # type: ignore[assignment]
+    ebooklib = None  # type: ignore[assignment]
+    epub = None  # type: ignore[assignment]
+    BeautifulSoup = None  # type: ignore[assignment]
+    SentenceTransformer = None  # type: ignore[assignment]
+    RecursiveCharacterTextSplitter = None  # type: ignore[assignment]
+    ChatOpenAI = None  # type: ignore[assignment]
+    HumanMessage = None  # type: ignore[assignment]
+    SystemMessage = None  # type: ignore[assignment]
+    _RAG_IMPORT_ERROR = e
+
 # ---------------------------------------------------------------------------
 # Mock mode — set MOCK_PIPELINES=true to skip real AI calls (useful for tests)
 # ---------------------------------------------------------------------------
 
 MOCK_PIPELINES = os.getenv("MOCK_PIPELINES", "false").lower() == "true"
 
+# RAG (mainapi.py) config
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("story-api")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+UPLOAD_DIR = Path("uploads")
+FAISS_STORE_DIR = Path("faiss_store")
+STORY_WORD_COUNTS = {"5_minutes": 700, "10_minutes": 1400, "15_minutes": 2100}
+
 # Maps session_id → latest job_id so callers can poll status by session_id
 _session_to_job: dict[str, str] = {}
+_vs_instance: Optional["FAISSVectorStoreManager"] = None
 
 
 class StoryChooseRequest(_BaseModel):
@@ -52,6 +99,127 @@ def _load_protagonist_image() -> str | None:
     return f"data:image/png;base64,{data}"
 
 
+class FAISSVectorStoreManager:
+    def __init__(self, store_dir: Path, model_name: str):
+        if _RAG_IMPORT_ERROR is not None:
+            raise RuntimeError(f"RAG dependencies unavailable: {_RAG_IMPORT_ERROR}")
+
+        self.store_dir = store_dir
+        self.store_dir.mkdir(parents=True, exist_ok=True)
+        self.lock = threading.Lock()
+        self.model_status = "loading"
+
+        try:
+            logger.info(f"Initializing SentenceTransformer: {model_name}")
+            self.encoder = SentenceTransformer(model_name, trust_remote_code=True)
+            self.dim = self.encoder.get_sentence_embedding_dimension()
+            self.model_status = "ready"
+        except Exception as e:
+            self.model_status = f"error: {str(e)}"
+            logger.critical(f"Encoder Load Failed: {e}")
+            raise
+
+        self.index = faiss.IndexFlatL2(self.dim)
+        self.metadata: list[dict[str, Any]] = []
+        self.files_registry: dict[str, dict[str, Any]] = {}
+        self.load()
+
+    def persist(self) -> None:
+        with self.lock:
+            try:
+                faiss.write_index(self.index, str(self.store_dir / "index.faiss"))
+                with open(self.store_dir / "store_data.json", "w") as f:
+                    json.dump({"metadata": self.metadata, "registry": self.files_registry}, f, indent=2)
+            except Exception as e:
+                logger.error(f"Persistence Failed: {e}")
+
+    def load(self) -> None:
+        idx_path = self.store_dir / "index.faiss"
+        meta_path = self.store_dir / "store_data.json"
+        if idx_path.exists() and meta_path.exists() and idx_path.stat().st_size > 0:
+            try:
+                self.index = faiss.read_index(str(idx_path))
+                with open(meta_path, "r") as f:
+                    data = json.load(f)
+                    self.metadata = data.get("metadata", [])
+                    self.files_registry = data.get("registry", {})
+                logger.info(f"Loaded {self.index.ntotal} vectors.")
+            except Exception as e:
+                logger.error(f"Corruption during load: {e}. Starting fresh.")
+
+    def add_documents(self, chunks: list[str], metas: list[dict[str, Any]]) -> int:
+        embeddings = self.encoder.encode(chunks, convert_to_numpy=True).astype(np.float32)
+        with self.lock:
+            self.index.add(embeddings)
+            for i, text in enumerate(chunks):
+                metas[i]["content"] = text
+                self.metadata.append(metas[i])
+        self.persist()
+        return len(chunks)
+
+    def similarity_search(self, query: str, k: int = 5) -> list[dict[str, Any]]:
+        if self.index.ntotal == 0:
+            return []
+        query_vec = self.encoder.encode([query], convert_to_numpy=True).astype(np.float32)
+        distances, indices = self.index.search(query_vec, k)
+        results: list[dict[str, Any]] = []
+        for dist, idx in zip(distances[0], indices[0]):
+            if idx != -1 and idx < len(self.metadata):
+                item = self.metadata[idx].copy()
+                item["score"] = float(1 / (1 + dist))
+                results.append(item)
+        return results
+
+
+def parse_document(file_path: Path) -> list[dict[str, Any]]:
+    pages: list[dict[str, Any]] = []
+    ext = file_path.suffix.lower()
+    try:
+        if ext == ".pdf":
+            with fitz.open(str(file_path)) as doc:
+                for i, page in enumerate(doc):
+                    text = page.get_text().strip()
+                    if len(text) > 50:
+                        pages.append({"text": text, "source": file_path.name, "page": i + 1})
+        elif ext == ".epub":
+            book = epub.read_epub(str(file_path))
+            for i, item in enumerate(book.get_items_of_type(ebooklib.ITEM_DOCUMENT)):
+                soup = BeautifulSoup(item.get_content(), "html.parser")
+                text = soup.get_text().strip()
+                if len(text) > 50:
+                    pages.append({"text": text, "source": file_path.name, "chapter": i + 1})
+    except Exception as e:
+        logger.error(f"Parsing Failed for {file_path.name}: {e}")
+    return pages
+
+
+def _init_rag_services() -> None:
+    global _vs_instance
+    UPLOAD_DIR.mkdir(exist_ok=True)
+    if _RAG_IMPORT_ERROR is not None:
+        logger.warning(f"RAG endpoints disabled: {_RAG_IMPORT_ERROR}")
+        return
+    try:
+        _vs_instance = FAISSVectorStoreManager(FAISS_STORE_DIR, EMBEDDING_MODEL_NAME)
+    except Exception as e:
+        logger.error(f"RAG initialization failed: {e}")
+        _vs_instance = None
+
+
+def get_vs() -> FAISSVectorStoreManager:
+    if _RAG_IMPORT_ERROR is not None:
+        raise HTTPException(503, f"RAG dependencies unavailable: {_RAG_IMPORT_ERROR}")
+    if not _vs_instance:
+        raise HTTPException(503, "Vector store initializing...")
+    return _vs_instance
+
+
+def get_llm():
+    if _RAG_IMPORT_ERROR is not None:
+        raise HTTPException(503, f"RAG dependencies unavailable: {_RAG_IMPORT_ERROR}")
+    return ChatOpenAI(model=OPENAI_MODEL, api_key=OPENAI_API_KEY)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _protagonist_image_b64
@@ -61,6 +229,8 @@ async def lifespan(app: FastAPI):
         download_if_missing(_PUBLIC_PROPS, _PUBLIC_DIR)
     # 2. Load protagonist reference image into memory once
     _protagonist_image_b64 = _load_protagonist_image()
+    # 3. Initialize optional RAG services merged from mainapi.py
+    _init_rag_services()
     yield
 
 app = FastAPI(title="Story Weaver API", lifespan=lifespan)
@@ -455,3 +625,91 @@ async def debug_stt(req: SttRequest):
         "word_overlap_pct": round(overlap * 100, 1),
         "match": overlap > 0.4,
     }
+
+
+# ---------------------------------------------------------------------------
+# RAG endpoints merged from mainapi.py
+# ---------------------------------------------------------------------------
+
+class StoryRequest(_BaseModel):
+    prompt: str
+    age_group: str = "4-6"
+    story_length: str = "10_minutes"
+    temperature: float = 0.5
+
+
+@app.get("/health")
+async def health(vs: Annotated[FAISSVectorStoreManager, Depends(get_vs)]):
+    return {
+        "status": "healthy" if vs.model_status == "ready" else "error",
+        "error_details": vs.model_status if "error" in vs.model_status else None,
+        "indexed_chunks": vs.index.ntotal,
+    }
+
+
+@app.post("/api/v1/upload")
+async def upload_file(
+    file: Annotated[UploadFile, File()],
+    vs: Annotated[FAISSVectorStoreManager, Depends(get_vs)],
+):
+    ext = Path(file.filename).suffix.lower()
+    if ext not in [".pdf", ".epub"]:
+        raise HTTPException(400, "Invalid file extension.")
+
+    file_id = str(uuid.uuid4())
+    save_path = UPLOAD_DIR / f"{file_id}{ext}"
+
+    with save_path.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    pages = await run_in_threadpool(parse_document, save_path)
+    if not pages:
+        raise HTTPException(422, "No readable text.")
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=80)
+    chunks: list[str] = []
+    metas: list[dict[str, Any]] = []
+    for page in pages:
+        for text in splitter.split_text(page["text"]):
+            chunks.append(text)
+            metas.append({"file_id": file_id, "source": page["source"]})
+
+    count = await run_in_threadpool(vs.add_documents, chunks, metas)
+    vs.files_registry[file_id] = {
+        "filename": file.filename,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    vs.persist()
+    return {"file_id": file_id, "chunks": count}
+
+
+@app.post("/api/v1/generate")
+async def generate_rag_story(
+    req: StoryRequest,
+    vs: Annotated[FAISSVectorStoreManager, Depends(get_vs)],
+    llm: Annotated[Any, Depends(get_llm)],
+):
+    target_words = STORY_WORD_COUNTS.get(req.story_length, STORY_WORD_COUNTS["10_minutes"])
+    retrieved = await run_in_threadpool(vs.similarity_search, req.prompt, 5)
+    context = "\n---\n".join([r["content"] for r in retrieved]) if retrieved else "No reference found."
+
+    sys_msg = SystemMessage(content="You are a children's book author. Use the style of the STYLE REFERENCE.")
+    usr_msg = HumanMessage(
+        content=(
+            f"STYLE REFERENCE:\n{context}\n\n"
+            f"STORY TOPIC: {req.prompt}\n"
+            f"AGE: {req.age_group}\n"
+            f"WORDS: {target_words}"
+        )
+    )
+
+    response = await run_in_threadpool(llm.invoke, [sys_msg, usr_msg])
+    return {
+        "story": response.content,
+        "sources": list(set([r.get("source") for r in retrieved])),
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
