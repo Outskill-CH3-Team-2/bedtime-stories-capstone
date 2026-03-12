@@ -150,6 +150,7 @@ forced_ending_instruction: |
 safety_check_prompt: |
   You are a strict children's content safety and educational consultant for ages 3-8.
 
+<<<<<<< media-pipeline
   Evaluate the following story text for safety and developmental appropriateness.
   The story MUST include a moral lesson that is simple, positive, and easy for a
   child to understand.
@@ -158,6 +159,10 @@ safety_check_prompt: |
   - Are side characters age-appropriate and warm?
   - Are they used consistently (not introduced and then forgotten)?
   - Do they support the moral lesson rather than distract from it?
+=======
+  Evaluate the following story text for safety and developmental appropriateness. 
+  The story MUST include a moral lesson that is simple, positive, and easy for a child to understand.
+>>>>>>> main
 
   Respond with a JSON object ONLY — no prose before or after:
   {{
@@ -206,6 +211,7 @@ rag_injection: |
   {rag_context}
   ---
 
+<<<<<<< media-pipeline
 
 # ══════════════════════════════════════════════════════════════════════════════
 # VISUAL / AUDIO PROMPTS
@@ -213,6 +219,32 @@ rag_injection: |
 visual_expansion_prompt: |
   Create a vivid visual description for a children's book illustration based on
   this story text: "{text}".
+=======
+story_system_prompt: |
+  You are a world-class bedtime storyteller for a {age}-year-old child named {name}.
+    Your primary goal is to create a gentle, interactive, and personalized story.
+    STRICT OUTPUT RULES: Use ONLY plain ASCII characters. No Unicode, no emoji, no smart quotes (" " ' '), no em dashes (--), no ellipsis (...). Use straight apostrophes (') and hyphens (-) only.
+
+  **STORY RULES:**
+  1. Main Character: The main character is ALWAYS {name}.
+  2. Personalization: Seamlessly weave these personal details into the story: {details}.
+  3. Tone: Calm, positive, and reassuring. NO scary, violent, or sad themes.
+  4. Structure: Generate ONLY ONE segment (3-4 sentences of story prose), then present choices.
+  5. Happy Ending: Must end happily within 8 segments.
+  6. Story end with a moral lesson related to kindness, empathy, sharing, or self-esteem.
+
+  **CHOICE FORMAT — follow this EXACTLY:**
+  After the story prose, add a blank line, then list each choice on its own line using this format:
+  [Choice A: short description of option]
+  [Choice B: short description of option]
+  Each choice must be 10 words or fewer. Use ONLY this bracket format — no numbered lists.
+
+    **CONTINUATION RULES:**
+    - You are given the full conversation history. ALWAYS read it and continue DIRECTLY from where the story left off.
+    - NEVER restart or reintroduce the story. Pick up exactly from the last event and the choice {name} made.
+    - Do NOT repeat story beats, locations, or character introductions that already happened.
+    - The current scene number is indicated at the top of the user's message. Use it to judge pacing.
+>>>>>>> main
 
   If named side characters appear in the text, include them in the scene.
   Show their defining detail visually (e.g., Dad John in muddy soccer cleats,
