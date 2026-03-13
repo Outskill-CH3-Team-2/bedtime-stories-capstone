@@ -27,32 +27,50 @@ export interface StoryState {
   error: string | null;
 }
 
+export interface FamilyMember {
+  name: string;
+  relation: string;
+  photo?: string; // base64 data URI — optional reference picture
+}
+
 export interface StoryConfig {
   childName: string;
   age: number | string;
-  favoriteFood: string;
-  favoriteColor: string;
-  favoriteActivity: string;
+  // ── Favorites (multi-select arrays) ──────────────────────────────────────
+  favoriteFoods: string[];
+  favoriteColors: string[];
+  favoriteActivities: string[];
+  // ── Companions ───────────────────────────────────────────────────────────
   petName: string;
   petType: string;
   friendName: string;
-  siblings: string;
-  parents: string;
-  grandparents: string;
+  siblings: FamilyMember[];
+  parents: FamilyMember[];
+  grandparents: FamilyMember[];
   childPhoto: string;
+  privacyAcknowledged: boolean;
 }
 
 export const DEFAULT_CONFIG: StoryConfig = {
   childName: '',
   age: '',
-  favoriteFood: '',
-  favoriteColor: '',
-  favoriteActivity: '',
+  favoriteFoods: [],
+  favoriteColors: [],
+  favoriteActivities: [],
   petName: '',
   petType: '',
   friendName: '',
-  siblings: '',
-  parents: '',
-  grandparents: '',
+  siblings: [],
+  parents: [
+    { name: '', relation: 'Mother' },
+    { name: '', relation: 'Father' },
+  ],
+  grandparents: [
+    { name: '', relation: 'Grandma' },
+    { name: '', relation: 'Grandpa' },
+    { name: '', relation: 'Grandma' },
+    { name: '', relation: 'Grandpa' },
+  ],
   childPhoto: '',
+  privacyAcknowledged: false,
 };

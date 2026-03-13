@@ -36,17 +36,44 @@ export const storyService = {
    * Returns { session_id, job_id }.
    */
   async startStory(idea: string, childInfo: any): Promise<{ sessionId: string; jobId: string }> {
+    const cfg: Record<string, any> = childInfo.personalization ?? {};
+
+    // Map camelCase StoryConfig fields → snake_case Personalization fields.
+    // Favorites are now arrays; join them into readable strings for the backend prompt.
+    const joinArr = (arr: string[] | string | undefined): string =>
+      Array.isArray(arr) ? arr.join(', ') : (arr || '');
+
+    const personalization: Record<string, any> = {
+      favourite_colour:   joinArr(cfg.favoriteColors)     || joinArr(cfg.favoriteColor),
+      favourite_food:     joinArr(cfg.favoriteFoods)      || joinArr(cfg.favoriteFood),
+      favourite_activity: joinArr(cfg.favoriteActivities) || joinArr(cfg.favoriteActivity),
+      pet_name:           cfg.petName    || '',
+      pet_type:           cfg.petType    || '',
+      friend_name:        cfg.friendName || '',
+      // Family lists — strip members without names; strip photo field (sent separately)
+      siblings:     (cfg.siblings     || []).filter((m: any) => m?.name).map(({ name, relation }: any) => ({ name, relation })),
+      parents:      (cfg.parents      || []).filter((m: any) => m?.name).map(({ name, relation }: any) => ({ name, relation })),
+      grandparents: (cfg.grandparents || []).filter((m: any) => m?.name).map(({ name, relation }: any) => ({ name, relation })),
+    };
+
+    const body: Record<string, any> = {
+      config: {
+        child_name: childInfo.name,
+        child_age: childInfo.age,
+        personalization,
+      },
+      story_idea: idea,
+    };
+
+    // Include child's reference photo if one was uploaded
+    if (cfg.childPhoto) {
+      body.protagonist_image_b64 = cfg.childPhoto;
+    }
+
     const response = await fetch(`${API_BASE}/story/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        config: {
-          child_name: childInfo.name,
-          child_age: childInfo.age,
-          personalization: childInfo.personalization ?? {},
-        },
-        story_idea: idea,
-      }),
+      body: JSON.stringify(body),
     });
     if (!response.ok) {
       const text = await response.text();
@@ -108,6 +135,24 @@ export const storyService = {
       const text = await response.text();
       throw new Error(`Failed to add character: ${response.status} ${text}`);
     }
+  },
+
+  /**
+   * Generate a storybook avatar portrait for a named side character.
+   * Returns a data-URI (data:image/png;base64,...).
+   */
+  async generateAvatar(name: string, relation: string, description?: string): Promise<string> {
+    const response = await fetch(`${API_BASE}/story/avatar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, relation, description: description || '' }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Avatar generation failed: ${response.status} ${text}`);
+    }
+    const data = await response.json();
+    return data.image_b64 as string;
   },
 
   async checkStatus(jobId: string): Promise<string> {
