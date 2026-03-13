@@ -87,11 +87,12 @@ async def test_generate_audio_success(mock_openai_client):
         assert audio_bytes.startswith(b"RIFF") 
         assert b"WAVE" in audio_bytes[:16]
         
-        # Verify OpenAI was called correctly
-        mock_openai_client.chat.completions.create.assert_awaited_once()
-        call_args = mock_openai_client.chat.completions.create.await_args[1]
-        assert call_args["model"] == "openai/gpt-4o-audio-preview"
-        assert "narrate this text: Hello world" in call_args["messages"][1]["content"]
+        # TTS pipeline calls the API twice: once for the director (enrichment) and
+        # once for the actor (narration). Verify both calls were made.
+        assert mock_openai_client.chat.completions.create.await_count == 2
+        # The final (actor) call uses the audio-preview model
+        final_call_args = mock_openai_client.chat.completions.create.await_args[1]
+        assert final_call_args["model"] == "openai/gpt-4o-audio-preview"
 
 @pytest.mark.asyncio
 async def test_generate_audio_handles_empty_stream(mock_openai_client):

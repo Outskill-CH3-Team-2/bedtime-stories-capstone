@@ -50,8 +50,10 @@ def _log_api_error(exc: Exception, attempt: int, model_name: str) -> bool:
     print(f"[tts] Error on attempt {attempt} ({model_name}): {exc}")
     return True
 
-def encode_b64(data: bytes) -> str:
-    """Helper to convert bytes to a base64 string."""
+def encode_b64(data: bytes | None) -> str:
+    """Convert bytes to a base64 string. Returns '' for empty/None input."""
+    if not data:
+        return ""
     return base64.b64encode(data).decode("utf-8")
 
 # ---------------------------------------------------------------------------

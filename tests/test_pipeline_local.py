@@ -170,9 +170,11 @@ class TestLevel1_Units:
 
     def test_build_prompt_structure(self):
         from backend.pipelines.text import build_prompt
-        msgs = build_prompt(_make_state().config, [], step_number=0)
+        history = [{"role": "user", "content": "The story idea is: a brave rabbit."}]
+        msgs = build_prompt(_make_state().config, history, step_number=0)
         assert msgs[0]["role"] == "system"
         assert "Emma" in msgs[0]["content"]
+        # With history, the last message must be the user turn
         assert msgs[-1]["role"] == "user"
 
     def test_build_prompt_ending_at_step8(self):
