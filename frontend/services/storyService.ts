@@ -43,17 +43,34 @@ export const storyService = {
     const joinArr = (arr: string[] | string | undefined): string =>
       Array.isArray(arr) ? arr.join(', ') : (arr || '');
 
+    // Resolve pet/friend from companions array (preferred) or legacy string fields
+    const companions: any[] = cfg.companions || [];
+    const petCompanion    = companions.find((c: any) => c.relation?.toLowerCase() !== 'best friend' && companions.indexOf(c) === 0)
+                          ?? companions[0];
+    const friendCompanion = companions.find((c: any) => c.relation?.toLowerCase().includes('friend'))
+                          ?? companions[1];
+
+    const mapMember = ({ name, relation, age, favourites }: any) => ({
+      name,
+      relation,
+      ...(age        ? { age }        : {}),
+      ...(favourites ? { favourites } : {}),
+    });
+
     const personalization: Record<string, any> = {
       favourite_colour:   joinArr(cfg.favoriteColors)     || joinArr(cfg.favoriteColor),
       favourite_food:     joinArr(cfg.favoriteFoods)      || joinArr(cfg.favoriteFood),
       favourite_activity: joinArr(cfg.favoriteActivities) || joinArr(cfg.favoriteActivity),
-      pet_name:           cfg.petName    || '',
-      pet_type:           cfg.petType    || '',
-      friend_name:        cfg.friendName || '',
+      // pet / friend resolved from companions carousel, with legacy fallback
+      pet_name:    petCompanion?.name    || cfg.petName    || '',
+      pet_type:    petCompanion?.relation !== 'Best Friend' ? (petCompanion?.relation || cfg.petType || '') : '',
+      friend_name: friendCompanion?.name || cfg.friendName || '',
+      // Full companions list (for future backend enrichment)
+      companions: companions.filter((m: any) => m?.name).map(mapMember),
       // Family lists — strip members without names; strip photo field (sent separately)
-      siblings:     (cfg.siblings     || []).filter((m: any) => m?.name).map(({ name, relation }: any) => ({ name, relation })),
-      parents:      (cfg.parents      || []).filter((m: any) => m?.name).map(({ name, relation }: any) => ({ name, relation })),
-      grandparents: (cfg.grandparents || []).filter((m: any) => m?.name).map(({ name, relation }: any) => ({ name, relation })),
+      siblings:     (cfg.siblings     || []).filter((m: any) => m?.name).map(mapMember),
+      parents:      (cfg.parents      || []).filter((m: any) => m?.name).map(mapMember),
+      grandparents: (cfg.grandparents || []).filter((m: any) => m?.name).map(mapMember),
     };
 
     const body: Record<string, any> = {

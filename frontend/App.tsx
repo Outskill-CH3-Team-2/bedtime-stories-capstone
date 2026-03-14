@@ -28,13 +28,28 @@ function migrateConfig(raw: any): StoryConfig {
 
   const toMembers = (arr: any[]): FamilyMember[] =>
     arr.filter(m => m && typeof m === 'object').map(m => ({
-      name:     typeof m.name     === 'string' ? m.name     : '',
-      relation: typeof m.relation === 'string' ? m.relation : '',
-      photo:    typeof m.photo    === 'string' ? m.photo    : undefined,
+      name:       typeof m.name       === 'string' ? m.name       : '',
+      relation:   typeof m.relation   === 'string' ? m.relation   : '',
+      age:        typeof m.age        === 'string' ? m.age        : (m.age != null ? String(m.age) : ''),
+      photo:      typeof m.photo      === 'string' ? m.photo      : undefined,
+      favourites: typeof m.favourites === 'string' ? m.favourites : '',
     }));
   base.siblings     = toMembers(base.siblings     as any[]);
   base.parents      = toMembers(base.parents      as any[]);
   base.grandparents = toMembers(base.grandparents as any[]);
+
+  // ── Companions: migrate old petName/petType/friendName → companions array ─
+  if (!Array.isArray(base.companions) || base.companions.length === 0) {
+    const companions: FamilyMember[] = [];
+    const petName    = (raw.petName    || '') as string;
+    const petType    = (raw.petType    || 'Pet') as string;
+    const friendName = (raw.friendName || '') as string;
+    companions.push({ name: petName,    relation: petType || 'Pet',         age: '', favourites: '' });
+    companions.push({ name: friendName, relation: 'Best Friend',            age: '', favourites: '' });
+    base.companions = companions;
+  } else {
+    base.companions = toMembers(base.companions as any[]);
+  }
 
   return base;
 }
@@ -457,18 +472,14 @@ const App: React.FC = () => {
         transition: 'background 1.5s ease',
       }} />
 
-      {/* Very faint paper texture overlay */}
-      <div style={{
-        position: 'absolute', inset: 0,
-        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E")`,
-        backgroundRepeat: 'repeat',
-        opacity: state.status === 'idle' ? 0.3 : 0.6,
-        pointerEvents: 'none',
-        transition: 'opacity 1.5s ease',
-      }} />
+      {/* Very faint paper texture overlay — class-based so the data-URI isn't rebuilt every render */}
+      <div
+        className="paper-noise"
+        style={{ opacity: state.status === 'idle' ? 0.3 : 0.6 }}
+      />
 
-      {/* Canvas particle layer — lightweight starry dust in idle state */}
-      {state.status === 'idle' && <LandingCanvas paused={animPaused} />}
+      {/* CSS particle layer — pause when config modal is open (no animated content under backdrop-filter) */}
+      {state.status === 'idle' && <LandingCanvas paused={animPaused || showConfig} />}
 
       <audio ref={audioRef} style={{ display: 'none' }} />
 

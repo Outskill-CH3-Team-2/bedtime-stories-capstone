@@ -5,7 +5,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dream Weaver</title>
-  <script src="https://cdn.tailwindcss.com"></script>
   <link
     href="https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400&family=Cinzel:wght@400;700;900&display=swap"
     rel="stylesheet">
@@ -258,6 +257,32 @@
       transform: scale(0.96);
     }
 
+    /* ── CSS-only particle animation (replaces canvas RAF loop) ── */
+    /* Two variants with hardcoded opacity — avoids var() in keyframes which
+       can prevent GPU compositing of opacity in some browsers              */
+    @keyframes dustFloatDim {
+      0%   { transform: translateY(0);      opacity: 0; }
+      8%   { opacity: 0.20; }
+      92%  { opacity: 0.20; }
+      100% { transform: translateY(-110vh); opacity: 0; }
+    }
+    @keyframes dustFloatBright {
+      0%   { transform: translateY(0);      opacity: 0; }
+      8%   { opacity: 0.32; }
+      92%  { opacity: 0.32; }
+      100% { transform: translateY(-110vh); opacity: 0; }
+    }
+
+    /* Paper noise texture — CSS class avoids re-building the data-URI on every render */
+    .paper-noise {
+      position: absolute;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+      pointer-events: none;
+      transition: opacity 1.5s ease;
+    }
+
     /* Sparkle animation for the landing page background */
     @keyframes sparkleFloat {
       0% {
@@ -411,6 +436,7 @@
           rgba(255, 245, 200, 0.28) 50%,
           transparent 80%);
       animation: shimmer 6s 1.4s ease-in-out infinite;
+      will-change: transform;
       pointer-events: none;
       border-radius: inherit;
     }
@@ -445,6 +471,7 @@
     }
 
     .book-float {
+      will-change: transform;
       animation:
         heroBookEntry 1.2s cubic-bezier(0, 0, 0.2, 1) forwards,
         bookFloat 4.2s 1.2s ease-in-out infinite;
@@ -817,15 +844,6 @@
       animation: waveBar 0.6s ease-in-out infinite;
     }
   </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://esm.sh/react@^19.2.4",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "react/": "https://esm.sh/react@^19.2.4/"
-  }
-}
-</script>
   <link rel="stylesheet" href="/index.css">
 </head>
 
