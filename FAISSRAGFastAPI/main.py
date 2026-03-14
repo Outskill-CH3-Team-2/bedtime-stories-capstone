@@ -1,481 +1,291 @@
-# ══════════════════════════════════════════════════════════════════════════════
-# RAG-Based Children's Story Generator — FastAPI Application
-# ══════════════════════════════════════════════════════════════════════════════
-
-# ── 1. Imports & Configuration ────────────────────────────────────────────────
+import io
 import os
+import base64
 import uuid
 import json
-import time
 import logging
 import shutil
+import threading
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Dict, Optional, Any
+from typing import Any, Optional, Annotated
+from contextlib import asynccontextmanager
 
-import numpy as np
-import fitz  # PyMuPDF
-import faiss
-import ebooklib
-from ebooklib import epub
-from bs4 import BeautifulSoup
-from sentence_transformers import SentenceTransformer
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import ChatOpenAI
-from langchain.prompts import ChatPromptTemplate
-from langchain.schema import HumanMessage, SystemMessage
-
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File, Depends
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
-from dotenv import load_dotenv
+from pydantic import BaseModel as _BaseModel
 
-# Load environment variables from .env file
-load_dotenv()
 
-# ── Logging setup ─────────────────────────────────────────────────────────────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+from backend.contracts import (
+    StoryState, StoryStatus,
+    GenerateRequest, GenerateResponse,
+    CharacterRef, AddCharacterRequest,
+    ChildConfig, SceneOutput, Choice,
 )
-logger = logging.getLogger("rag-story-api")
+from backend.orchestrator.pipeline import process_scene
+from backend.session_store import session_store, job_store
+from backend.safety.filters import sanitize_input
+from utils.download_assets import download_if_missing
 
-# ── Configuration from environment ────────────────────────────────────────────
-OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4")
-EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
-MAX_FILE_SIZE_MB: int = int(os.getenv("MAX_FILE_SIZE_MB", "50"))
-UPLOAD_DIR: Path = Path(os.getenv("UPLOAD_DIR", "./uploads"))
-FAISS_STORE_DIR: Path = Path(os.getenv("FAISS_STORE_DIR", "./faiss_store"))
-DEFAULT_CHUNK_SIZE: int = int(os.getenv("DEFAULT_CHUNK_SIZE", "500"))
-DEFAULT_CHUNK_OVERLAP: int = int(os.getenv("DEFAULT_CHUNK_OVERLAP", "50"))
-DEFAULT_TOP_K: int = int(os.getenv("DEFAULT_TOP_K", "5"))
-APP_VERSION: str = "1.0.0"
+try:
+    import numpy as np
+    import fitz  # PyMuPDF
+    import faiss
+    import ebooklib
+    from ebooklib import epub
+    from bs4 import BeautifulSoup
+    from sentence_transformers import SentenceTransformer
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+    _RAG_IMPORT_ERROR: Exception | None = None
+except Exception as e:
+    np = None  # type: ignore[assignment]
+    fitz = None  # type: ignore[assignment]
+    faiss = None  # type: ignore[assignment]
+    ebooklib = None  # type: ignore[assignment]
+    epub = None  # type: ignore[assignment]
+    BeautifulSoup = None  # type: ignore[assignment]
+    SentenceTransformer = None  # type: ignore[assignment]
+    RecursiveCharacterTextSplitter = None  # type: ignore[assignment]
+    _RAG_IMPORT_ERROR = e
 
-# Word count targets per story length
-STORY_WORD_COUNTS: Dict[str, int] = {
-    "5_minutes": 700,
-    "10_minutes": 1400,
-    "15_minutes": 2100,
+# ---------------------------------------------------------------------------
+# Mock mode — set MOCK_PIPELINES=true to skip real AI calls (useful for tests)
+# ---------------------------------------------------------------------------
+
+MOCK_PIPELINES = os.getenv("MOCK_PIPELINES", "false").lower() == "true"
+
+# ---------------------------------------------------------------------------
+# RAG configuration
+# ---------------------------------------------------------------------------
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("story-api")
+
+OPENAI_API_KEY       = os.getenv("OPENAI_API_KEY", "")
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+UPLOAD_DIR           = Path("uploads")
+FAISS_STORE_DIR      = Path("faiss_store")
+STORY_WORD_COUNTS    = {"5_minutes": 700, "10_minutes": 1400, "15_minutes": 2100}
+
+# Maps age_group string from StoryRequest → ChildConfig.child_age (int)
+_AGE_GROUP_MAP: dict[str, int] = {
+    "3-5": 4, "4-6": 5, "5-7": 6, "6-8": 7,
+    "3":   3, "4":   4, "5":   5, "6":   6, "7": 7, "8": 8,
 }
 
-# ── Custom Exceptions ─────────────────────────────────────────────────────────
-class UnsupportedFileTypeError(Exception):
-    pass
-
-class EmptyVectorStoreError(Exception):
-    pass
-
-class LLMGenerationError(Exception):
-    pass
-
-class FileTooLargeError(Exception):
-    pass
+# Maps session_id → latest job_id so callers can poll status by session_id
+_session_to_job: dict[str, str] = {}
+_vs_instance: Optional["FAISSVectorStoreManager"] = None
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ── 2. FAISS Vector Store Manager ────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
+class StoryChooseRequest(_BaseModel):
+    session_id: str
+    choice_id: str = ""
+    choice_text: str
+
+
+# Resolve paths relative to project root (one level above this file's package)
+_PROJECT_ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_PUBLIC_DIR     = os.path.join(_PROJECT_ROOT, "frontend", "public")
+_PUBLIC_PROPS   = os.path.join(_PUBLIC_DIR, "binaries.properties")
+_CHILD_PHOTO    = os.path.join(_PUBLIC_DIR, "child_photo_01.png")
+
+# Loaded once at startup; injected into every new session (never sent to client)
+_protagonist_image_b64: str | None = None
+
+
+def _load_protagonist_image() -> str | None:
+    if not os.path.exists(_CHILD_PHOTO):
+        print(f"[startup] child_photo_01.png not found at {_CHILD_PHOTO} — images will have no reference")
+        return None
+    with open(_CHILD_PHOTO, "rb") as f:
+        data = base64.b64encode(f.read()).decode()
+    print(f"[startup] Protagonist reference image loaded ({len(data)} chars base64)")
+    return f"data:image/png;base64,{data}"
+
 
 class FAISSVectorStoreManager:
-    """
-    Singleton manager for the FAISS vector index.
-    Handles embedding storage, similarity search, persistence, and deletion.
-    """
+    def __init__(self, store_dir: Path, model_name: str):
+        if _RAG_IMPORT_ERROR is not None:
+            raise RuntimeError(f"RAG dependencies unavailable: {_RAG_IMPORT_ERROR}")
 
-    METADATA_FILE = "metadata.json"
-    INDEX_FILE = "index.faiss"
-    FILES_REGISTRY = "files_registry.json"
-
-    def __init__(self, store_dir: Path, embedding_model_name: str):
         self.store_dir = store_dir
         self.store_dir.mkdir(parents=True, exist_ok=True)
-        self.embedding_model_name = embedding_model_name
+        self.lock = threading.Lock()
+        self.model_status = "loading"
 
-        logger.info(f"Loading embedding model: {embedding_model_name}")
-        self.encoder = SentenceTransformer(embedding_model_name)
-        self.embedding_dim: int = self.encoder.get_sentence_embedding_dimension()
+        try:
+            logger.info(f"Initializing SentenceTransformer: {model_name}")
+            self.encoder = SentenceTransformer(model_name, trust_remote_code=True)
+            self.dim = self.encoder.get_sentence_embedding_dimension()
+            self.model_status = "ready"
+        except Exception as e:
+            self.model_status = f"error: {str(e)}"
+            logger.critical(f"Encoder Load Failed: {e}")
+            raise
 
-        # In-memory metadata: list of dicts, index position == vector ID
-        self.metadata: List[Dict[str, Any]] = []
-        # Files registry: file_id → file metadata
-        self.files_registry: Dict[str, Dict] = {}
-
-        self.index: faiss.IndexFlatL2 = faiss.IndexFlatL2(self.embedding_dim)
+        self.index = faiss.IndexFlatL2(self.dim)
+        self.metadata: list[dict[str, Any]] = []
+        self.files_registry: dict[str, dict[str, Any]] = {}
         self.load()
 
-    # ── Persistence ────────────────────────────────────────────────────────
     def persist(self) -> None:
-        """Save FAISS index and metadata JSON to disk."""
-        faiss.write_index(self.index, str(self.store_dir / self.INDEX_FILE))
-        with open(self.store_dir / self.METADATA_FILE, "w") as f:
-            json.dump(self.metadata, f, indent=2)
-        with open(self.store_dir / self.FILES_REGISTRY, "w") as f:
-            json.dump(self.files_registry, f, indent=2, default=str)
-        logger.info(f"Persisted FAISS index ({self.index.ntotal} vectors) to disk.")
+        with self.lock:
+            try:
+                faiss.write_index(self.index, str(self.store_dir / "index.faiss"))
+                with open(self.store_dir / "store_data.json", "w") as f:
+                    json.dump({"metadata": self.metadata, "registry": self.files_registry}, f, indent=2)
+            except Exception as e:
+                logger.error(f"Persistence Failed: {e}")
 
     def load(self) -> None:
-        """Load FAISS index and metadata from disk if they exist."""
-        index_path = self.store_dir / self.INDEX_FILE
-        meta_path = self.store_dir / self.METADATA_FILE
-        registry_path = self.store_dir / self.FILES_REGISTRY
+        idx_path  = self.store_dir / "index.faiss"
+        meta_path = self.store_dir / "store_data.json"
+        if idx_path.exists() and meta_path.exists() and idx_path.stat().st_size > 0:
+            try:
+                self.index = faiss.read_index(str(idx_path))
+                with open(meta_path, "r") as f:
+                    data = json.load(f)
+                    self.metadata       = data.get("metadata", [])
+                    self.files_registry = data.get("registry", {})
+                logger.info(f"Loaded {self.index.ntotal} vectors.")
+            except Exception as e:
+                logger.error(f"Corruption during load: {e}. Starting fresh.")
 
-        if index_path.exists() and meta_path.exists():
-            self.index = faiss.read_index(str(index_path))
-            with open(meta_path) as f:
-                self.metadata = json.load(f)
-            logger.info(f"Loaded FAISS index with {self.index.ntotal} vectors.")
-        else:
-            self.index = faiss.IndexFlatL2(self.embedding_dim)
-            self.metadata = []
-            logger.info("No existing FAISS index found — starting fresh.")
-
-        if registry_path.exists():
-            with open(registry_path) as f:
-                self.files_registry = json.load(f)
-
-    # ── Add Documents ──────────────────────────────────────────────────────
-    def add_documents(self, chunks: List[str], chunk_metadata: List[Dict]) -> int:
-        """
-        Embed text chunks and add them to the FAISS index.
-        Returns the number of vectors added.
-        """
-        if not chunks:
-            return 0
-
-        logger.info(f"Embedding {len(chunks)} chunks...")
-        # Generate embeddings using sentence-transformers (local, no API key needed)
-        embeddings = self.encoder.encode(chunks, show_progress_bar=False, convert_to_numpy=True)
-        embeddings = embeddings.astype(np.float32)
-
-        # FAISS expects shape (n, dim)
-        self.index.add(embeddings)
-
-        # Store metadata aligned with vector IDs
-        for i, meta in enumerate(chunk_metadata):
-            meta["text_preview"] = chunks[i][:200]  # Store first 200 chars as preview
-            self.metadata.append(meta)
-
+    def add_documents(self, chunks: list[str], metas: list[dict[str, Any]]) -> int:
+        embeddings = self.encoder.encode(chunks, convert_to_numpy=True).astype(np.float32)
+        with self.lock:
+            self.index.add(embeddings)
+            for i, text in enumerate(chunks):
+                metas[i]["content"] = text
+                self.metadata.append(metas[i])
         self.persist()
-        logger.info(f"Added {len(chunks)} vectors. Total: {self.index.ntotal}")
         return len(chunks)
 
-    # ── Similarity Search ──────────────────────────────────────────────────
-    def similarity_search(self, query: str, k: int = 5) -> List[Dict]:
-        """
-        Semantic similarity search: finds top-k passages most similar to the query.
-        Returns list of dicts with text, score, source, chunk_index.
-        """
+    def similarity_search(self, query: str, k: int = 5) -> list[dict[str, Any]]:
         if self.index.ntotal == 0:
-            raise EmptyVectorStoreError("Vector store is empty. Please upload and embed books first.")
-
-        # Encode the query using the same embedding model
+            return []
         query_vec = self.encoder.encode([query], convert_to_numpy=True).astype(np.float32)
-        k = min(k, self.index.ntotal)
-
-        # FAISS returns L2 distances and indices
         distances, indices = self.index.search(query_vec, k)
-
-        results = []
+        results: list[dict[str, Any]] = []
         for dist, idx in zip(distances[0], indices[0]):
-            if idx == -1:
-                continue
-            meta = self.metadata[idx]
-            # Convert L2 distance to a similarity score (lower distance = higher similarity)
-            score = float(1 / (1 + dist))
-            results.append({
-                "text": meta.get("text_preview", ""),
-                "score": round(score, 4),
-                "source": meta.get("source", "unknown"),
-                "chunk_index": meta.get("chunk_index", idx),
-                "file_id": meta.get("file_id", ""),
-            })
-
+            if idx != -1 and idx < len(self.metadata):
+                item = self.metadata[idx].copy()
+                item["score"] = float(1 / (1 + dist))
+                results.append(item)
         return results
 
-    # ── Delete by File ID ──────────────────────────────────────────────────
-    def delete_by_file_id(self, file_id: str) -> int:
-        """
-        Remove all vectors associated with a file_id.
-        Rebuilds the FAISS index without those vectors.
-        Returns number of vectors removed.
-        """
-        # Filter out chunks belonging to this file
-        keep_indices = [i for i, m in enumerate(self.metadata) if m.get("file_id") != file_id]
-        removed_count = len(self.metadata) - len(keep_indices)
 
-        if removed_count == 0:
-            return 0
-
-        # Reconstruct the index with remaining vectors
-        remaining_meta = [self.metadata[i] for i in keep_indices]
-
-        # Re-encode remaining text previews to rebuild index
-        new_index = faiss.IndexFlatL2(self.embedding_dim)
-        if remaining_meta:
-            texts = [m.get("text_preview", "") for m in remaining_meta]
-            embeddings = self.encoder.encode(texts, show_progress_bar=False, convert_to_numpy=True)
-            new_index.add(embeddings.astype(np.float32))
-
-        self.index = new_index
-        self.metadata = remaining_meta
-
-        # Remove from files registry
-        self.files_registry.pop(file_id, None)
-        self.persist()
-
-        logger.info(f"Deleted {removed_count} vectors for file_id={file_id}")
-        return removed_count
-
-    # ── Stats ──────────────────────────────────────────────────────────────
-    def get_stats(self) -> Dict:
-        """Return stats about the current vector store."""
-        index_path = self.store_dir / self.INDEX_FILE
-        size_mb = round(index_path.stat().st_size / (1024 * 1024), 2) if index_path.exists() else 0.0
-        unique_docs = len(set(m.get("file_id") for m in self.metadata))
-        return {
-            "total_vectors": self.index.ntotal,
-            "total_documents": unique_docs,
-            "embedding_model": self.embedding_model_name,
-            "faiss_index_type": "IndexFlatL2",
-            "store_size_mb": size_mb,
-            "is_ready": self.index.ntotal > 0,
-        }
-
-    def register_file(self, file_id: str, file_info: Dict) -> None:
-        """Register a file in the files registry."""
-        self.files_registry[file_id] = file_info
-        self.persist()
-
-    def update_file_status(self, file_id: str, status: str, chunks: int = 0) -> None:
-        """Update the status of a registered file."""
-        if file_id in self.files_registry:
-            self.files_registry[file_id]["status"] = status
-            if chunks:
-                self.files_registry[file_id]["chunks"] = chunks
-            self.persist()
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ── 3. Document Parsers ───────────────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
-
-def parse_pdf(filepath: str) -> List[Dict]:
-    """
-    Extract text from a PDF file page by page using PyMuPDF.
-    Skips pages with fewer than 50 characters (likely blank or image-only).
-    Returns list of {text, page_number, source}.
-    """
-    pages = []
-    source = Path(filepath).name
+def parse_document(file_path: Path) -> list[dict[str, Any]]:
+    pages: list[dict[str, Any]] = []
+    ext = file_path.suffix.lower()
     try:
-        doc = fitz.open(filepath)
-        for page_num in range(len(doc)):
-            page = doc[page_num]
-            text = page.get_text("text").strip()
-            if len(text) < 50:
-                continue  # Skip sparse pages
-            pages.append({
-                "text": text,
-                "page_number": page_num + 1,
-                "source": source,
-            })
-        doc.close()
-        logger.info(f"PDF parsed: {len(pages)} pages extracted from {source}")
+        if ext == ".pdf":
+            with fitz.open(str(file_path)) as doc:
+                for i, page in enumerate(doc):
+                    text = page.get_text().strip()
+                    if len(text) > 50:
+                        pages.append({"text": text, "source": file_path.name, "page": i + 1})
+        elif ext == ".epub":
+            book = epub.read_epub(str(file_path))
+            for i, item in enumerate(book.get_items_of_type(ebooklib.ITEM_DOCUMENT)):
+                soup = BeautifulSoup(item.get_content(), "html.parser")
+                text = soup.get_text().strip()
+                if len(text) > 50:
+                    pages.append({"text": text, "source": file_path.name, "chapter": i + 1})
     except Exception as e:
-        logger.error(f"PDF parse error: {e}")
-        raise ValueError(f"Could not parse PDF: {e}")
+        logger.error(f"Parsing Failed for {file_path.name}: {e}")
     return pages
 
 
-def parse_epub(filepath: str) -> List[Dict]:
-    """
-    Extract text from an EPUB file using ebooklib and BeautifulSoup.
-    Iterates through spine items, strips HTML tags, and returns clean text.
-    Returns list of {text, chapter, source}.
-    """
-    chapters = []
-    source = Path(filepath).name
+def _init_rag_services() -> None:
+    global _vs_instance
+    UPLOAD_DIR.mkdir(exist_ok=True)
+    if _RAG_IMPORT_ERROR is not None:
+        # Log the specific missing package so it's actionable from startup logs
+        logger.warning(
+            f"[RAG] Optional packages not installed — RAG endpoints disabled.\n"
+            f"  Error: {_RAG_IMPORT_ERROR}\n"
+            f"  Fix:   pip install -r requirements.txt"
+        )
+        return
     try:
-        book = epub.read_epub(filepath)
-        chapter_num = 0
-        for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-            content = item.get_content()
-            soup = BeautifulSoup(content, "html.parser")
-            # Remove script and style tags
-            for tag in soup(["script", "style"]):
-                tag.decompose()
-            text = soup.get_text(separator=" ", strip=True)
-            if len(text) < 50:
-                continue  # Skip near-empty chapters
-            chapter_num += 1
-            chapters.append({
-                "text": text,
-                "chapter": chapter_num,
-                "source": source,
-            })
-        logger.info(f"EPUB parsed: {len(chapters)} chapters extracted from {source}")
+        _vs_instance = FAISSVectorStoreManager(FAISS_STORE_DIR, EMBEDDING_MODEL_NAME)
+        logger.info(f"[RAG] Vector store ready — {_vs_instance.index.ntotal} chunks indexed.")
     except Exception as e:
-        logger.error(f"EPUB parse error: {e}")
-        raise ValueError(f"Could not parse EPUB: {e}")
-    return chapters
+        logger.error(
+            f"[RAG] FAISSVectorStoreManager init failed: {type(e).__name__}: {e}\n"
+            f"  Story pipeline will run without RAG context."
+        )
+        _vs_instance = None
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ── 4. Embedding + Chunking Pipeline ─────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
-
-def chunk_documents(
-    pages: List[Dict],
-    file_id: str,
-    chunk_size: int = DEFAULT_CHUNK_SIZE,
-    chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
-) -> tuple[List[str], List[Dict]]:
+async def _fetch_rag_context(query: str) -> str | None:
     """
-    Split extracted document pages/chapters into overlapping chunks
-    using LangChain's RecursiveCharacterTextSplitter.
-    Returns (chunks_text, chunks_metadata).
+    Run a similarity search against the FAISS store and return a formatted
+    context string for injection into the story pipeline.
+
+    Returns None if RAG is unavailable or the index is empty — the caller
+    should treat None as "no context" and proceed without it.
     """
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        separators=["\n\n", "\n", ". ", " ", ""],
-    )
-
-    all_chunks: List[str] = []
-    all_metadata: List[Dict] = []
-
-    for page in pages:
-        raw_text = page["text"]
-        splits = splitter.split_text(raw_text)
-        for i, chunk in enumerate(splits):
-            all_chunks.append(chunk)
-            all_metadata.append({
-                "file_id": file_id,
-                "source": page.get("source", "unknown"),
-                "chunk_index": len(all_chunks) - 1,
-                "page_or_chapter": page.get("page_number") or page.get("chapter", 0),
-            })
-
-    # Update total_chunks count
-    total = len(all_chunks)
-    for m in all_metadata:
-        m["total_chunks"] = total
-
-    logger.info(f"Chunked into {total} pieces (size={chunk_size}, overlap={chunk_overlap})")
-    return all_chunks, all_metadata
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ── 6. Story Generation Chain ─────────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
-
-def generate_story(
-    prompt: str,
-    retrieved_passages: List[Dict],
-    age_group: str,
-    story_length: str,
-    temperature: float,
-    model: str,
-) -> str:
-    """
-    Use OpenAI GPT via LangChain to generate a children's story.
-    Retrieved passages serve as style and context references (RAG augmentation).
-    """
-    if not OPENAI_API_KEY:
-        raise LLMGenerationError("OPENAI_API_KEY is not configured.")
-
-    word_count = STORY_WORD_COUNTS.get(story_length, 1400)
-
-    # Format retrieved passages as style examples
-    passages_text = "\n\n---\n\n".join(
-        [f"[Passage {i+1} from {p.get('source', 'book')}]:\n{p['text']}"
-         for i, p in enumerate(retrieved_passages)]
-    )
-
-    system_prompt = (
-        "You are a master children's story writer with decades of experience. "
-        "Study the REFERENCE PASSAGES below carefully — they represent the writing style, "
-        "vocabulary, pacing, and narrative patterns you should emulate. "
-        "Do NOT copy them directly. Use them purely as creative style inspiration. "
-        "Always end with a clear, positive moral lesson."
-    )
-
-    user_prompt = f"""REFERENCE PASSAGES (use these as style guides):
-{passages_text}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-YOUR TASK:
-Write a COMPLETE original children's story for age group: {age_group}
-Target length: approximately {word_count} words ({story_length.replace("_", " ")} read-aloud)
-
-Story prompt: "{prompt}"
-
-Requirements:
-- Start with an engaging TITLE on the first line (e.g., "Title: The Brave Little Fox")
-- Create vivid, memorable characters
-- Clear beginning → conflict → resolution arc
-- Age-appropriate vocabulary for {age_group} year olds
-- Positive moral lesson woven naturally into the story
-- A warm, satisfying conclusion
-- Write the full story now, do not summarize or truncate.
-"""
-
-    llm = ChatOpenAI(
-        model=model,
-        temperature=temperature,
-        api_key=OPENAI_API_KEY,
-        max_tokens=3000,
-    )
-
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=user_prompt),
-    ]
-
+    if _vs_instance is None or _vs_instance.model_status != "ready":
+        return None
+    if not query.strip():
+        return None
     try:
-        response = llm.invoke(messages)
-        return response.content
+        hits = await run_in_threadpool(_vs_instance.similarity_search, query, 5)
+        if not hits:
+            return None
+        context = "\n---\n".join(h["content"] for h in hits)
+        logger.info(f"[RAG] Retrieved {len(hits)} chunks for query: {query[:60]!r}")
+        return context
     except Exception as e:
-        logger.error(f"LLM generation error: {e}")
-        raise LLMGenerationError(f"Story generation failed: {e}")
+        logger.warning(f"[RAG] similarity_search failed: {type(e).__name__}: {e}")
+        return None
 
 
-def extract_title_and_body(story_text: str) -> tuple[str, str]:
-    """Extract title and body from generated story text."""
-    lines = story_text.strip().split("\n")
-    title = "A Magical Story"
-    body = story_text
+def get_vs() -> FAISSVectorStoreManager:
+    """FastAPI dependency for RAG-only endpoints that strictly require the vector store."""
+    if _RAG_IMPORT_ERROR is not None:
+        raise HTTPException(
+            503,
+            detail=f"RAG packages not installed: {_RAG_IMPORT_ERROR}. Run: pip install -r requirements.txt",
+        )
+    if _vs_instance is None:
+        raise HTTPException(
+            503,
+            detail="Vector store failed to initialize at startup — check server logs for details.",
+        )
+    if _vs_instance.model_status != "ready":
+        raise HTTPException(
+            503,
+            detail=f"Embedding model not ready (status: {_vs_instance.model_status}).",
+        )
+    return _vs_instance
 
-    for i, line in enumerate(lines):
-        if line.lower().startswith("title:"):
-            title = line.replace("title:", "").replace("Title:", "").strip().strip('"')
-            body = "\n".join(lines[i + 1:]).strip()
-            break
-        elif i == 0 and len(line) < 100:
-            # First line that's short is likely the title
-            title = line.strip().strip('"').strip("*").strip("#")
-            body = "\n".join(lines[1:]).strip()
-            break
-
-    return title, body
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ── 7. FastAPI App + Middleware ────────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _protagonist_image_b64
+    # 1. Start session / job cleanup background tasks
+    session_store.start_cleanup_task()
+    job_store.start_cleanup_task()
+    # 2. Download any missing public-folder assets (intro video, child photo, etc.)
+    if os.path.exists(_PUBLIC_PROPS):
+        print("[startup] Checking public assets...")
+        download_if_missing(_PUBLIC_PROPS, _PUBLIC_DIR)
+    # 3. Load protagonist reference image into memory once
+    _protagonist_image_b64 = _load_protagonist_image()
+    # 4. Initialize optional RAG services
+    _init_rag_services()
+    yield
+    # Shutdown: cancel background tasks cleanly
+    session_store.stop_cleanup_task()
+    job_store.stop_cleanup_task()
 
-app = FastAPI(
-    title="RAG Story Generator API",
-    description="Generate children's bedtime stories from uploaded eBooks using RAG",
-    version=APP_VERSION,
-    docs_url="/docs",
-    redoc_url="/redoc",
-)
+app = FastAPI(title="Story Weaver API", lifespan=lifespan)
 
-# CORS — allow all origins for development
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -484,325 +294,558 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Request logging middleware
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    start = time.time()
-    response = await call_next(request)
-    duration = round(time.time() - start, 3)
-    logger.info(f"{request.method} {request.url.path} → {response.status_code} ({duration}s)")
-    return response
 
-# Global vector store manager (initialized on startup)
-vector_store: FAISSVectorStoreManager = None
+# ---------------------------------------------------------------------------
+# Background task
+# ---------------------------------------------------------------------------
+
+async def run_pipeline_task(job_id: str, session_id: str, choice_text: str = ""):
+    """
+    Run the pipeline for one job.
+
+    Each job works on a snapshot of the session state so that parallel
+    pre-generation jobs (one per choice branch) don't corrupt each other's
+    conversation history.  The choice_text for this branch is appended to the
+    snapshot before running so the LLM sees the correct context.
+
+    RAG context is fetched here (if the vector store is ready) and injected
+    into the snapshot before the pipeline runs.  The live session is never
+    mutated; rag_context is job-scoped.
+    """
+    job = job_store.get(job_id)
+    state = session_store.get(session_id)
+    if not job or not state:
+        return
+
+    # Snapshot: deep-copy so parallel jobs don't race on ss.messages / ss.status
+    state_snapshot = state.model_copy(deep=True)
+    state_snapshot.job_id = job_id   # tag snapshot so pipeline logs show which job = which artefact
+
+    # Append this branch's choice to the snapshot (not the live session)
+    if choice_text:
+        state_snapshot.step_number += 1
+        state_snapshot.messages.append({
+            "role": "user",
+            "content": f"[Scene {state_snapshot.step_number}] {choice_text}",
+        })
+
+    # ── Inject RAG context into the snapshot ──────────────────────────────
+    # Build a query from the most relevant signal available for this job:
+    # for step 1 use the story idea; for later steps use the chosen branch text.
+    rag_query = choice_text.strip() or state_snapshot.story_idea or ""
+    rag_context = await _fetch_rag_context(rag_query)
+    if rag_context:
+        state_snapshot.rag_context = rag_context
+        print(f"[API] RAG context injected for job={job_id} session={session_id} ({len(rag_context)} chars)")
+    else:
+        # Keep whatever was already in the session (may be None)
+        # — don't overwrite with None if a previous turn stored context.
+        if state_snapshot.rag_context is None:
+            print(f"[API] No RAG context available for job={job_id} (store empty or not ready)")
+
+    try:
+        scene_result = await process_scene(state_snapshot)
+        job.status = StoryStatus.COMPLETE
+        job.result = scene_result
+        # Store the assistant response so it can be committed to the live session
+        # when the user selects this branch.
+        last_msg = state_snapshot.messages[-1] if state_snapshot.messages else {}
+        if last_msg.get("role") == "assistant":
+            job.raw_text = last_msg["content"]
+
+    except Exception as e:
+        print(f"[API] Pipeline failed for job={job_id} session={session_id}: {e}")
+        job.status = StoryStatus.FAILED
+    finally:
+        job_store.update(job)
 
 
-# ── Custom Exception Handlers ──────────────────────────────────────────────────
-@app.exception_handler(UnsupportedFileTypeError)
-async def unsupported_file_handler(request, exc):
-    return JSONResponse(status_code=400, content={"error": "UnsupportedFileType", "detail": str(exc)})
+# ---------------------------------------------------------------------------
+# Mock pipeline (used when MOCK_PIPELINES=true)
+# ---------------------------------------------------------------------------
 
-@app.exception_handler(EmptyVectorStoreError)
-async def empty_store_handler(request, exc):
-    return JSONResponse(status_code=503, content={"error": "EmptyVectorStore", "detail": str(exc)})
+async def _mock_pipeline_task(job_id: str, session_id: str) -> None:
+    """Return synthetic scene data without calling any AI APIs."""
+    import asyncio
+    await asyncio.sleep(0.1)
 
-@app.exception_handler(LLMGenerationError)
-async def llm_error_handler(request, exc):
-    return JSONResponse(status_code=502, content={"error": "LLMGenerationError", "detail": str(exc)})
+    job = job_store.get(job_id)
+    state = session_store.get(session_id)
+    if not job or not state:
+        return
 
-@app.exception_handler(FileTooLargeError)
-async def file_too_large_handler(request, exc):
-    return JSONResponse(status_code=413, content={"error": "FileTooLarge", "detail": str(exc)})
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ── 8. Pydantic Schemas ────────────────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
-
-class EmbedRequest(BaseModel):
-    file_id: str
-    chunk_size: Optional[int] = Field(default=DEFAULT_CHUNK_SIZE, ge=100, le=2000)
-    chunk_overlap: Optional[int] = Field(default=DEFAULT_CHUNK_OVERLAP, ge=0, le=200)
-
-class StoryRequest(BaseModel):
-    prompt: str = Field(..., min_length=5, max_length=500)
-    age_group: Optional[str] = Field(default="4-6", pattern=r"^(2-4|4-6|6-8|8-12)$")
-    story_length: Optional[str] = Field(default="10_minutes", pattern=r"^(5_minutes|10_minutes|15_minutes)$")
-    top_k: Optional[int] = Field(default=DEFAULT_TOP_K, ge=1, le=20)
-    temperature: Optional[float] = Field(default=0.85, ge=0.0, le=1.0)
-
-class SearchRequest(BaseModel):
-    query: str = Field(..., min_length=3)
-    top_k: Optional[int] = Field(default=5, ge=1, le=20)
+    scene = SceneOutput(
+        session_id=session_id,
+        step_number=state.step_number,
+        is_ending=False,
+        story_text=f"{state.config.child_name} went on a magical adventure!",
+        choices=[
+            Choice(id="c1_mock", text="Follow the glowing path"),
+            Choice(id="c2_mock", text="Stay and explore here"),
+        ],
+    )
+    job.status = StoryStatus.COMPLETE
+    job.result = scene
+    job_store.update(job)
+    state.status = StoryStatus.COMPLETE
+    state.messages.append({"role": "assistant", "content": scene.story_text})
+    session_store.set(session_id, state)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ── 9. API Endpoints ──────────────────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
-# ── Health Check ──────────────────────────────────────────────────────────────
-@app.get("/health", tags=["System"])
-async def health_check():
-    """Returns API health status and whether the FAISS index is ready."""
+@app.get("/")
+async def root():
+    rag_status = "unavailable"
+    if _RAG_IMPORT_ERROR is None:
+        if _vs_instance is None:
+            rag_status = "init_failed"
+        elif _vs_instance.model_status == "ready":
+            rag_status = f"ready ({_vs_instance.index.ntotal} chunks)"
+        else:
+            rag_status = _vs_instance.model_status
     return {
         "status": "ok",
-        "version": APP_VERSION,
-        "faiss_ready": vector_store.index.ntotal > 0 if vector_store else False,
+        "service": "Story Weaver API",
+        "version": "1.0",
+        "mock_mode": MOCK_PIPELINES,
+        "rag_status": rag_status,
     }
 
 
-# ── Upload File ───────────────────────────────────────────────────────────────
-@app.post("/api/v1/upload", tags=["Documents"])
+@app.post("/story/start")
+async def story_start(config: ChildConfig, background_tasks: BackgroundTasks):
+    """Simple story-start endpoint: accepts ChildConfig, returns session_id + job_id."""
+    safe_config = sanitize_input(config)
+    state = StoryState(config=safe_config)
+    session_store.set(state.session_id, state)
+
+    job = job_store.create(state.session_id)
+    _session_to_job[state.session_id] = job.job_id
+
+    if MOCK_PIPELINES:
+        background_tasks.add_task(_mock_pipeline_task, job.job_id, state.session_id)
+    else:
+        background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, "")
+
+    return {"session_id": state.session_id, "job_id": job.job_id, "step_number": state.step_number}
+
+
+@app.post("/story/choose")
+async def story_choose(request: StoryChooseRequest, background_tasks: BackgroundTasks):
+    """Advance the story by committing a choice and firing the next generation."""
+    state = session_store.get(request.session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    state.step_number += 1
+    state.messages.append({"role": "user", "content": request.choice_text})
+    session_store.set(request.session_id, state)
+
+    job = job_store.create(state.session_id)
+    _session_to_job[state.session_id] = job.job_id
+
+    if MOCK_PIPELINES:
+        background_tasks.add_task(_mock_pipeline_task, job.job_id, request.session_id)
+    else:
+        background_tasks.add_task(run_pipeline_task, job.job_id, request.session_id, request.choice_text)
+
+    return {"step_number": state.step_number, "session_id": request.session_id, "job_id": job.job_id}
+
+
+# ---------------------------------------------------------------------------
+# Legacy endpoints (/generate/*)
+# ---------------------------------------------------------------------------
+
+@app.post("/generate/start")
+async def legacy_generate_start(background_tasks: BackgroundTasks):
+    """Legacy stub: creates a default session and fires a generation job."""
+    config = ChildConfig(child_name="Friend", child_age=5)
+    state = StoryState(config=config)
+    session_store.set(state.session_id, state)
+
+    job = job_store.create(state.session_id)
+    _session_to_job[state.session_id] = job.job_id
+
+    if MOCK_PIPELINES:
+        background_tasks.add_task(_mock_pipeline_task, job.job_id, state.session_id)
+    else:
+        background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, "")
+
+    return {"session_id": state.session_id, "job_id": job.job_id}
+
+
+@app.get("/generate/status/{id}")
+async def legacy_get_status(id: str):
+    """Legacy status endpoint: accepts either job_id or session_id."""
+    job = job_store.get(id)
+    if not job:
+        job_id = _session_to_job.get(id)
+        if job_id:
+            job = job_store.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"status": job.status, "job_id": job.job_id}
+
+
+@app.post("/story/generate", response_model=GenerateResponse)
+async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
+    """
+    Unified generate endpoint for first chapter AND subsequent chapters.
+
+    First chapter (session_id absent):
+        - Requires config + story_idea.
+        - Creates a new session, registers the protagonist image, fires generation.
+        - Returns { session_id, job_id }.
+
+    Next chapter (session_id present):
+        - Requires choice_text (the chosen option text).
+        - Looks up the existing session, advances conversation history, fires generation.
+        - Returns { session_id, job_id }.
+
+    The caller is expected to fire one job per available choice (pre-generation).
+    Each fires independently; only the job matching the user's selection matters.
+    """
+    if not request.session_id:
+        # ── First chapter ──────────────────────────────────────────────────
+        if not request.config or not request.story_idea:
+            raise HTTPException(status_code=422, detail="config and story_idea required for first chapter")
+
+        safe_config = sanitize_input(request.config)
+
+        state = StoryState(
+            config=safe_config,
+            story_idea=request.story_idea,
+            messages=[{"role": "user", "content": f"The story idea is: {request.story_idea}"}],
+        )
+
+        # Register protagonist: server-loaded image > request payload > nothing
+        ref_image = _protagonist_image_b64 or request.protagonist_image_b64
+        if ref_image:
+            state.characters[safe_config.child_name.lower()] = CharacterRef(
+                name=safe_config.child_name,
+                role="protagonist",
+                image_b64=ref_image,
+            )
+            print(f"[API] Protagonist registered for session {state.session_id} ({safe_config.child_name})")
+        else:
+            print(f"[API] No protagonist image — session {state.session_id} will generate without reference")
+
+        session_store.set(state.session_id, state)
+
+    else:
+        # ── Next chapter ───────────────────────────────────────────────────
+        # The frontend fires one job per available choice immediately after
+        # displaying a scene (pre-generation).  These jobs must NOT mutate the
+        # live session — each gets a snapshot with its own choice appended.
+        # The session history is advanced lazily: when the user fires the
+        # FOLLOWING round's pre-generation jobs, pass `prev_job_id` so we can
+        # commit the selected branch's history first.
+        if not request.choice_text:
+            raise HTTPException(status_code=422, detail="choice_text required for next chapter")
+
+        state = session_store.get(request.session_id)
+        if not state:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # If the caller tells us which job was selected in the previous round,
+        # commit that branch's history to the live session now.
+        # Guard against duplicate commits — every prefire call in a round sends
+        # the same prev_job_id, so only the first one actually writes.
+        if request.prev_job_id and request.prev_job_id != state.last_committed_job_id:
+            prev_job = job_store.get(request.prev_job_id)
+            if prev_job and prev_job.status == StoryStatus.COMPLETE and prev_job.raw_text:
+                # Commit: user choice + assistant response from the selected job
+                state.step_number += 1
+                state.messages.append({"role": "user", "content": f"[Scene {state.step_number}] {request.prev_choice_text or ''}"})
+                state.messages.append({"role": "assistant", "content": prev_job.raw_text})
+                state.last_committed_job_id = request.prev_job_id
+                session_store.set(state.session_id, state)
+                print(f"[API] Committed job {request.prev_job_id} history to session {state.session_id} step={state.step_number}")
+            elif prev_job and prev_job.status == StoryStatus.COMPLETE and not prev_job.raw_text:
+                print(f"[API] prev_job {request.prev_job_id} has no raw_text — history not committed")
+        elif request.prev_job_id and request.prev_job_id == state.last_committed_job_id:
+            print(f"[API] Skipping duplicate commit of job {request.prev_job_id} for session {state.session_id}")
+
+    # ── Create job and fire ────────────────────────────────────────────────
+    job = job_store.create(state.session_id)
+    branch_choice = request.choice_text or ""
+    background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, branch_choice)
+
+    print(f"[API] Job {job.job_id} queued for session {state.session_id} step={state.step_number} choice='{branch_choice[:40]}'")
+    return GenerateResponse(session_id=state.session_id, job_id=job.job_id)
+
+
+@app.post("/story/character")
+async def add_character(request: AddCharacterRequest):
+    """
+    Add or update a side-character reference image for an existing session.
+    The image is stored only in server memory for the lifetime of the session.
+    """
+    state = session_store.get(request.session_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    char = request.character
+    state.characters[char.name.lower()] = char
+    session_store.set(request.session_id, state)
+    print(f"[API] Character '{char.name}' ({char.role}) added to session {request.session_id}")
+    return {"status": "ok", "character": char.name}
+
+
+def _resolve_job(id: str):
+    """Look up a job by job_id, or fall back to the latest job for a session_id."""
+    job = job_store.get(id)
+    if not job:
+        job_id = _session_to_job.get(id)
+        if job_id:
+            job = job_store.get(job_id)
+    return job
+
+
+@app.get("/story/status/{id}")
+async def get_status(id: str):
+    job = _resolve_job(id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"status": job.status, "job_id": job.job_id, "session_id": job.session_id}
+
+
+@app.get("/story/result/{id}")
+async def get_result(id: str):
+    job = _resolve_job(id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status == StoryStatus.FAILED:
+        raise HTTPException(status_code=500, detail="Story generation failed")
+
+    if job.status != StoryStatus.COMPLETE:
+        raise HTTPException(status_code=400, detail="Result not ready")
+
+    return job.result
+
+
+# ---------------------------------------------------------------------------
+# Debug: STT transcription endpoint (temporary diagnostic)
+# ---------------------------------------------------------------------------
+
+class SttRequest(_BaseModel):
+    audio_b64: str      # raw base64 WAV (no data-URI prefix)
+    job_id: str = ""
+    story_text: str = ""
+
+
+@app.post("/story/debug/stt")
+async def debug_stt(req: SttRequest):
+    """
+    Transcribe the given WAV audio (base64) with Whisper and compare to story_text.
+    Returns transcript + whether it matches the story_text (word-overlap %).
+    Temporary diagnostic — remove once audio bug is confirmed fixed.
+    """
+    try:
+        wav_bytes = base64.b64decode(req.audio_b64)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Bad base64: {e}")
+
+    from openai import AsyncOpenAI
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    # OpenRouter does NOT proxy Whisper (405). Call OpenAI directly.
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        print(f"[debug/stt] OPENAI_API_KEY not set — STT diagnostic skipped for job={req.job_id}")
+        return {
+            "job_id": req.job_id,
+            "transcript": "",
+            "story_text_preview": req.story_text[:300],
+            "word_overlap_pct": -1,
+            "match": None,
+            "skipped": True,
+            "reason": "OPENAI_API_KEY not configured",
+        }
+    client = AsyncOpenAI(api_key=api_key)
+
+    audio_file = io.BytesIO(wav_bytes)
+    audio_file.name = "narration.wav"
+
+    try:
+        result = await client.audio.transcriptions.create(
+            model="whisper-1",
+            file=audio_file,
+        )
+        transcript = result.text.strip()
+    except Exception as e:
+        print(f"[debug/stt] Whisper failed: {e}")
+        raise HTTPException(status_code=500, detail=f"STT failed: {e}")
+
+    # Word-overlap metric (jaccard of word sets, case-insensitive)
+    import re
+    def _words(t: str) -> set:
+        return set(re.sub(r"[^a-z0-9\s]", "", t.lower()).split())
+
+    story_words = _words(req.story_text)
+    audio_words = _words(transcript)
+    if story_words or audio_words:
+        overlap = len(story_words & audio_words) / len(story_words | audio_words)
+    else:
+        overlap = 1.0
+
+    print(
+        f"\n[debug/stt] job={req.job_id}\n"
+        f"  TRANSCRIPT : {transcript[:300]!r}\n"
+        f"  STORY_TEXT : {req.story_text[:300]!r}\n"
+        f"  WORD_OVERLAP: {overlap:.0%}\n"
+    )
+
+    return {
+        "job_id": req.job_id,
+        "transcript": transcript,
+        "story_text_preview": req.story_text[:300],
+        "word_overlap_pct": round(overlap * 100, 1),
+        "match": overlap > 0.4,
+    }
+
+
+# ---------------------------------------------------------------------------
+# RAG endpoints  (/health, /api/v1/upload, /api/v1/generate)
+# ---------------------------------------------------------------------------
+
+class StoryRequest(_BaseModel):
+    prompt: str
+    age_group: str = "4-6"          # e.g. "4-6", "5-7" — mapped to ChildConfig.child_age
+    story_length: str = "10_minutes" # "5_minutes" | "10_minutes" | "15_minutes"
+    child_name: str = "Friend"       # personalise the protagonist
+    voice: str = "onyx"              # OpenAI TTS voice
+
+
+@app.get("/health")
+async def health():
+    """
+    Always returns 200 with RAG subsystem status.
+    Use this to diagnose '503 RAG dependencies unavailable' and
+    '503 Vector store initializing' issues without needing a working VS.
+    """
+    if _RAG_IMPORT_ERROR is not None:
+        return {
+            "status": "degraded",
+            "rag_available": False,
+            "rag_import_error": str(_RAG_IMPORT_ERROR),
+            "fix": "pip install -r requirements.txt",
+            "indexed_chunks": 0,
+        }
+    if _vs_instance is None:
+        return {
+            "status": "degraded",
+            "rag_available": True,
+            "rag_model_status": "init_failed",
+            "detail": "FAISSVectorStoreManager failed at startup — check server logs.",
+            "indexed_chunks": 0,
+        }
+    return {
+        "status": "healthy" if _vs_instance.model_status == "ready" else "degraded",
+        "rag_available": True,
+        "rag_model_status": _vs_instance.model_status,
+        "indexed_chunks": _vs_instance.index.ntotal,
+    }
+
+
+@app.post("/api/v1/upload")
 async def upload_file(
-    file: UploadFile = File(...),
-    metadata: Optional[str] = Form(default=None),
+    file: Annotated[UploadFile, File()],
+    vs: Annotated[FAISSVectorStoreManager, Depends(get_vs)],
+):
+    ext = Path(file.filename).suffix.lower()
+    if ext not in [".pdf", ".epub"]:
+        raise HTTPException(400, "Invalid file extension.")
+
+    file_id   = str(uuid.uuid4())
+    save_path = UPLOAD_DIR / f"{file_id}{ext}"
+
+    with save_path.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    pages = await run_in_threadpool(parse_document, save_path)
+    if not pages:
+        raise HTTPException(422, "No readable text.")
+
+    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=80)
+    chunks: list[str]          = []
+    metas:  list[dict[str, Any]] = []
+    for page in pages:
+        for text in splitter.split_text(page["text"]):
+            chunks.append(text)
+            metas.append({"file_id": file_id, "source": page["source"]})
+
+    count = await run_in_threadpool(vs.add_documents, chunks, metas)
+    vs.files_registry[file_id] = {
+        "filename": file.filename,
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    vs.persist()
+    return {"file_id": file_id, "chunks": count}
+
+
+@app.post("/api/v1/generate", response_model=GenerateResponse)
+async def generate_rag_story(
+    req: StoryRequest,
+    background_tasks: BackgroundTasks,
 ):
     """
-    Upload a PDF or EPUB file to the server.
-    The file is saved to disk and registered for later embedding.
+    RAG-enhanced story generation using the full Story Weaver pipeline.
+
+    Workflow:
+      1. Builds a ChildConfig from the request fields.
+      2. Creates a new session with story_idea = req.prompt.
+      3. Fires run_pipeline_task as a background job.
+         - run_pipeline_task automatically fetches RAG context from the FAISS
+           store (if available) and injects it into the pipeline before the
+           LLM call — no separate search needed here.
+         - The pipeline produces: story text + TTS audio + illustration + choices.
+      4. Returns { session_id, job_id } immediately.
+
+    Caller flow:
+      - Poll GET /story/status/{job_id} until status == "complete"
+      - Fetch GET /story/result/{job_id} for SceneOutput
+        (story_text, narration_audio_b64, illustration_b64, choices)
+      - Continue the story via POST /story/generate with session_id + choice_text
     """
-    # Validate file type
-    allowed_extensions = {".pdf", ".epub"}
-    file_ext = Path(file.filename).suffix.lower()
-    if file_ext not in allowed_extensions:
-        raise UnsupportedFileTypeError(
-            f"File type '{file_ext}' is not supported. Allowed: {', '.join(allowed_extensions)}"
-        )
+    # Derive child_age from age_group string; default to 5 if unrecognised
+    child_age = _AGE_GROUP_MAP.get(req.age_group, 5)
 
-    # Check file size
-    content = await file.read()
-    size_mb = len(content) / (1024 * 1024)
-    if size_mb > MAX_FILE_SIZE_MB:
-        raise FileTooLargeError(f"File size {size_mb:.1f}MB exceeds limit of {MAX_FILE_SIZE_MB}MB.")
+    # Embed the target word count in the story idea so the pipeline's
+    # text builder (build_prompt) picks it up as part of the theme anchor.
+    target_words = STORY_WORD_COUNTS.get(req.story_length, STORY_WORD_COUNTS["10_minutes"])
+    story_idea = f"{req.prompt} (target length: ~{target_words} words)"
 
-    # Generate unique file ID and save to disk
-    file_id = str(uuid.uuid4())
-    save_path = UPLOAD_DIR / f"{file_id}{file_ext}"
-    save_path.write_bytes(content)
-
-    # Parse optional metadata
-    extra_meta = {}
-    if metadata:
-        try:
-            extra_meta = json.loads(metadata)
-        except json.JSONDecodeError:
-            pass
-
-    # Register file in the vector store's files registry
-    file_info = {
-        "file_id": file_id,
-        "filename": file.filename,
-        "original_ext": file_ext,
-        "size_mb": round(size_mb, 2),
-        "status": "uploaded",
-        "uploaded_at": datetime.now(timezone.utc).isoformat(),
-        "chunks": 0,
-        **extra_meta,
-    }
-    vector_store.register_file(file_id, file_info)
-
-    logger.info(f"Uploaded: {file.filename} → {file_id} ({size_mb:.2f}MB)")
-    return {
-        "file_id": file_id,
-        "filename": file.filename,
-        "status": "uploaded",
-        "size_mb": round(size_mb, 2),
-        "message": "File saved successfully. Call /api/v1/embed to process it.",
-    }
-
-
-# ── Parse & Embed ─────────────────────────────────────────────────────────────
-@app.post("/api/v1/embed", tags=["Documents"])
-async def embed_file(request: EmbedRequest):
-    """
-    Parse an uploaded PDF/EPUB and create FAISS vector embeddings.
-    This is the core ingestion step of the RAG pipeline.
-    """
-    file_id = request.file_id
-
-    # Find the uploaded file on disk
-    file_info = vector_store.files_registry.get(file_id)
-    if not file_info:
-        raise HTTPException(status_code=404, detail=f"file_id '{file_id}' not found. Upload the file first.")
-
-    file_ext = file_info["original_ext"]
-    file_path = UPLOAD_DIR / f"{file_id}{file_ext}"
-    if not file_path.exists():
-        raise HTTPException(status_code=404, detail=f"File on disk not found for file_id '{file_id}'.")
-
-    start_time = time.time()
-
-    # Route to correct parser based on file type
-    try:
-        if file_ext == ".pdf":
-            pages = parse_pdf(str(file_path))
-        elif file_ext == ".epub":
-            pages = parse_epub(str(file_path))
-        else:
-            raise UnsupportedFileTypeError(f"Cannot parse file type: {file_ext}")
-    except ValueError as e:
-        vector_store.update_file_status(file_id, "error")
-        raise HTTPException(status_code=422, detail=str(e))
-
-    # Chunk the extracted text
-    chunks, chunk_metadata = chunk_documents(
-        pages,
-        file_id=file_id,
-        chunk_size=request.chunk_size,
-        chunk_overlap=request.chunk_overlap,
+    safe_config = sanitize_input(
+        ChildConfig(child_name=req.child_name, child_age=child_age, voice=req.voice)
     )
 
-    # Embed and add to FAISS index
-    added = vector_store.add_documents(chunks, chunk_metadata)
-
-    # Update file registry
-    vector_store.update_file_status(file_id, "embedded", chunks=added)
-
-    processing_time = round(time.time() - start_time, 2)
-    logger.info(f"Embedded {file_id}: {added} chunks in {processing_time}s")
-
-    return {
-        "file_id": file_id,
-        "status": "embedded",
-        "chunks_created": added,
-        "embedding_model": EMBEDDING_MODEL,
-        "vector_store_size": vector_store.index.ntotal,
-        "processing_time_seconds": processing_time,
-    }
-
-
-# ── Generate Story ─────────────────────────────────────────────────────────────
-@app.post("/api/v1/generate-story", tags=["Stories"])
-async def generate_story_endpoint(request: StoryRequest):
-    """
-    RAG pipeline: retrieve similar passages from FAISS, then generate
-    a children's story using GPT-4 augmented with those passages as style examples.
-    """
-    if vector_store.index.ntotal == 0:
-        raise EmptyVectorStoreError(
-            "No books have been embedded yet. Upload PDF/EPUB files and call /api/v1/embed first."
-        )
-
-    # ── Step 1: Semantic Search (RAG retrieval) ──
-    logger.info(f"Retrieving top {request.top_k} passages for prompt: '{request.prompt}'")
-    retrieved = vector_store.similarity_search(request.prompt, k=request.top_k)
-
-    # ── Step 2: Augmented Generation ──
-    logger.info(f"Generating story with model={OPENAI_MODEL}, length={request.story_length}")
-    story_text = generate_story(
-        prompt=request.prompt,
-        retrieved_passages=retrieved,
-        age_group=request.age_group,
-        story_length=request.story_length,
-        temperature=request.temperature,
-        model=OPENAI_MODEL,
+    state = StoryState(
+        config=safe_config,
+        story_idea=story_idea,
+        messages=[{"role": "user", "content": f"The story idea is: {story_idea}"}],
     )
+    session_store.set(state.session_id, state)
 
-    title, body = extract_title_and_body(story_text)
-    word_count = len(body.split())
-    read_time = round(word_count / 140)  # ~140 words per minute read-aloud
+    job = job_store.create(state.session_id)
+    _session_to_job[state.session_id] = job.job_id
 
-    return {
-        "story_title": title,
-        "story": body,
-        "word_count": word_count,
-        "estimated_read_time_minutes": read_time,
-        "age_group": request.age_group,
-        "retrieved_passages_count": len(retrieved),
-        "model_used": OPENAI_MODEL,
-        "prompt_used": request.prompt,
-    }
+    if MOCK_PIPELINES:
+        background_tasks.add_task(_mock_pipeline_task, job.job_id, state.session_id)
+    else:
+        background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, "")
 
-
-# ── Knowledge Base Status ──────────────────────────────────────────────────────
-@app.get("/api/v1/knowledge-base/status", tags=["Knowledge Base"])
-async def knowledge_base_status():
-    """Return statistics about the FAISS vector store."""
-    return vector_store.get_stats()
-
-
-# ── List Files ─────────────────────────────────────────────────────────────────
-@app.get("/api/v1/files", tags=["Documents"])
-async def list_files():
-    """List all uploaded and processed files."""
-    files = list(vector_store.files_registry.values())
-    return {"files": files, "total": len(files)}
-
-
-# ── Delete File ────────────────────────────────────────────────────────────────
-@app.delete("/api/v1/files/{file_id}", tags=["Documents"])
-async def delete_file(file_id: str):
-    """Remove a file and all its associated vectors from the knowledge base."""
-    if file_id not in vector_store.files_registry:
-        raise HTTPException(status_code=404, detail=f"file_id '{file_id}' not found.")
-
-    file_info = vector_store.files_registry[file_id]
-    file_ext = file_info.get("original_ext", "")
-    file_path = UPLOAD_DIR / f"{file_id}{file_ext}"
-
-    # Remove vectors from FAISS
-    removed = vector_store.delete_by_file_id(file_id)
-
-    # Remove file from disk
-    if file_path.exists():
-        file_path.unlink()
-
-    logger.info(f"Deleted file {file_id}: {removed} vectors removed.")
-    return {
-        "file_id": file_id,
-        "status": "deleted",
-        "vectors_removed": removed,
-    }
-
-
-# ── Semantic Search ─────────────────────────────────────────────────────────────
-@app.post("/api/v1/search", tags=["Knowledge Base"])
-async def semantic_search(request: SearchRequest):
-    """
-    Direct semantic search against the knowledge base.
-    Useful for debugging retrieval quality.
-    """
-    if vector_store.index.ntotal == 0:
-        raise EmptyVectorStoreError("Vector store is empty. Upload and embed books first.")
-
-    results = vector_store.similarity_search(request.query, k=request.top_k)
-    return {
-        "query": request.query,
-        "results": results,
-    }
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ── 9. Startup / Shutdown Events ─────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
-
-@app.on_event("startup")
-async def startup_event():
-    """
-    On startup: create required directories and load existing FAISS index.
-    """
-    global vector_store
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    FAISS_STORE_DIR.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Startup: upload_dir={UPLOAD_DIR}, faiss_store={FAISS_STORE_DIR}")
-    vector_store = FAISSVectorStoreManager(
-        store_dir=FAISS_STORE_DIR,
-        embedding_model_name=EMBEDDING_MODEL,
+    logger.info(
+        f"[RAG→pipeline] session={state.session_id} job={job.job_id} "
+        f"prompt={req.prompt[:60]!r} age={child_age} words={target_words}"
     )
-    logger.info(f"✅ RAG Story API ready. FAISS vectors: {vector_store.index.ntotal}")
+    return GenerateResponse(session_id=state.session_id, job_id=job.job_id)
 
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Persist the FAISS index on graceful shutdown."""
-    if vector_store:
-        vector_store.persist()
-    logger.info("Shutdown complete.")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ── 10. Main Entry Point ──────────────────────────────────────────────────────
-# ══════════════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
     import uvicorn
