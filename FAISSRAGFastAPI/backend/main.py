@@ -23,7 +23,7 @@ from backend.contracts import (
     StoryState, StoryStatus,
     GenerateRequest, GenerateResponse,
     CharacterRef, AddCharacterRequest,
-    ChildConfig, SceneOutput, Choice,
+    ChildConfig, Personalization, SceneOutput, Choice,
 )
 from backend.orchestrator.pipeline import process_scene
 from backend.session_store import session_store, job_store
@@ -437,12 +437,14 @@ async def run_pipeline_task(job_id: str, session_id: str, choice_text: str = "")
     rag_context = await _fetch_rag_context(rag_query)
     if rag_context:
         state_snapshot.rag_context = rag_context
-        print(f"[API] RAG context injected for job={job_id} session={session_id} ({len(rag_context)} chars)")
+        logger.info(f"[RAG] Context injected for job={job_id} ({len(rag_context)} chars)")
     else:
-        # Keep whatever was already in the session (may be None)
-        # — don't overwrite with None if a previous turn stored context.
-        if state_snapshot.rag_context is None:
-            print(f"[API] No RAG context available for job={job_id} (store empty or not ready)")
+        # Carry forward context from a previous turn if available so later
+        # chapters still have some grounding even if the choice text misses.
+        if state_snapshot.rag_context:
+            logger.info(f"[RAG] No new context for job={job_id} — reusing previous turn context")
+        else:
+            logger.info(f"[RAG] No context found for job={job_id} — proceeding with LLM-only generation")
 
     try:
         scene_result = await process_scene(state_snapshot)
@@ -719,7 +721,10 @@ async def get_result(id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job.status == StoryStatus.FAILED:
-        raise HTTPException(status_code=500, detail="Story generation failed")
+        raise HTTPException(
+            status_code=500,
+            detail=job.error or "Story generation failed — check server logs.",
+        )
 
     if job.status != StoryStatus.COMPLETE:
         raise HTTPException(status_code=400, detail="Result not ready")
@@ -817,6 +822,14 @@ class StoryRequest(_BaseModel):
     story_length: str = Field("10_minutes", max_length=20)
     child_name: str = Field("Friend", max_length=30)
     voice: str = Field("onyx", max_length=20)
+    # Personalization fields (mirrors Personalization model)
+    favourite_colour:     str       = Field("", max_length=30)
+    favourite_animal:     str       = Field("", max_length=30)
+    favourite_food:       str       = Field("", max_length=30)
+    favourite_activities: list[str] = Field(default_factory=list)
+    pet_name:             str       = Field("", max_length=30)
+    pet_type:             str       = Field("", max_length=30)
+    place_to_visit:       str       = Field("", max_length=50)
 
 
 @app.get("/health")
@@ -908,27 +921,13 @@ async def delete_file(
 
 
 @app.post("/api/v1/generate", response_model=GenerateResponse)
-async def generate_rag_story(
-    req: StoryRequest,
-):
+async def generate_rag_story(req: StoryRequest):
     """
-    RAG-enhanced story generation using the full Story Weaver pipeline.
+    Story generation with optional RAG enrichment.
 
-    Workflow:
-      1. Builds a ChildConfig from the request fields.
-      2. Creates a new session with story_idea = req.prompt.
-      3. Fires run_pipeline_task as a background job.
-         - run_pipeline_task automatically fetches RAG context from the FAISS
-           store (if available) and injects it into the pipeline before the
-           LLM call — no separate search needed here.
-         - The pipeline produces: story text + TTS audio + illustration + choices.
-      4. Returns { session_id, job_id } immediately.
-
-    Caller flow:
-      - Poll GET /story/status/{job_id} until status == "complete"
-      - Fetch GET /story/result/{job_id} for SceneOutput
-        (story_text, narration_audio_b64, illustration_b64, choices)
-      - Continue the story via POST /story/generate with session_id + choice_text
+    When books have been uploaded, the pipeline injects relevant content as
+    context. When none are available (or no matching chunks are found), the
+    LLM generates freely based on the child's idea and personalisation fields.
     """
     # Derive child_age from age_group string; default to 5 if unrecognised
     child_age = _AGE_GROUP_MAP.get(req.age_group, 5)
@@ -943,7 +942,20 @@ async def generate_rag_story(
     story_idea = f"{safe_prompt} (target length: ~{target_words} words)"
 
     safe_config = sanitize_input(
-        ChildConfig(child_name=req.child_name, child_age=child_age, voice=req.voice)
+        ChildConfig(
+            child_name=req.child_name,
+            child_age=child_age,
+            voice=req.voice,
+            personalization=Personalization(
+                favourite_colour=req.favourite_colour,
+                favourite_animal=req.favourite_animal,
+                favourite_food=req.favourite_food,
+                favourite_activities=req.favourite_activities,
+                pet_name=req.pet_name,
+                pet_type=req.pet_type,
+                place_to_visit=req.place_to_visit,
+            ),
+        )
     )
 
     state = StoryState(

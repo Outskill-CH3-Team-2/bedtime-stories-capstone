@@ -115,6 +115,7 @@ class JobState(BaseModel):
     status: StoryStatus = StoryStatus.PENDING
     result: Optional[SceneOutput] = None  # filled when COMPLETE
     raw_text: str = ""                    # LLM raw response — committed to session on user selection
+    error: str = ""                       # human-readable failure reason (RAG-only mode, pipeline errors)
 
 class SafetyResult(BaseModel):
     passed: bool = True
