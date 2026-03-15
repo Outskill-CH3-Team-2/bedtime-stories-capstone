@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Play, RotateCcw } from 'lucide-react'
-import { storyGenerate, pollUntilDone } from '../api'
+import { storyGenerate, pollUntilDone, sanitizeError } from '../api'
 import type { SceneOutput, ChildConfig } from '../api'
 import SceneDisplay from './SceneDisplay'
 
@@ -34,7 +34,14 @@ export default function StoryPipelineTab() {
   const [loading,    setLoading]    = useState(false)
   const [err,        setErr]        = useState('')
 
+  // AbortController ref — cancelled on unmount or reset to stop dangling polls
+  const abortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => { abortRef.current?.abort() }, [])
+
   async function startStory() {
+    abortRef.current?.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
     setLoading(true); setErr(''); setPollStatus('starting…')
     setTurns([]); setSessionId(null); setPrevJobId(null)
     try {
@@ -47,11 +54,11 @@ export default function StoryPipelineTab() {
       }
       const { session_id, job_id } = await storyGenerate({ config, story_idea: storyIdea })
       setSessionId(session_id)
-      const scene = await pollUntilDone(job_id, setPollStatus)
+      const scene = await pollUntilDone(job_id, setPollStatus, 1500, 180_000, ac.signal)
       setTurns([{ scene, jobId: job_id, choiceText: '' }])
       setPrevJobId(job_id)
     } catch (e: any) {
-      setErr(e?.response?.data?.detail ?? e.message)
+      if ((e as DOMException).name !== 'AbortError') setErr(sanitizeError(e))
     } finally {
       setLoading(false); setPollStatus('')
     }
@@ -59,6 +66,9 @@ export default function StoryPipelineTab() {
 
   async function chooseOption(choiceText: string) {
     if (!sessionId) return
+    abortRef.current?.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
     setLoading(true); setErr(''); setPollStatus('generating next scene…')
     try {
       const { job_id } = await storyGenerate({
@@ -67,17 +77,18 @@ export default function StoryPipelineTab() {
         prev_job_id: prevJobId ?? undefined,
         prev_choice_text: turns.at(-1)?.choiceText ?? '',
       })
-      const scene = await pollUntilDone(job_id, setPollStatus)
+      const scene = await pollUntilDone(job_id, setPollStatus, 1500, 180_000, ac.signal)
       setTurns(prev => [...prev, { scene, jobId: job_id, choiceText }])
       setPrevJobId(job_id)
     } catch (e: any) {
-      setErr(e?.response?.data?.detail ?? e.message)
+      if ((e as DOMException).name !== 'AbortError') setErr(sanitizeError(e))
     } finally {
       setLoading(false); setPollStatus('')
     }
   }
 
   function reset() {
+    abortRef.current?.abort()
     setTurns([]); setSessionId(null); setPrevJobId(null); setErr(''); setPollStatus('')
   }
 

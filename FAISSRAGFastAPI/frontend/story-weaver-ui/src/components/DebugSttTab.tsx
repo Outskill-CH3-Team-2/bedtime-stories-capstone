@@ -74,15 +74,9 @@ export default function DebugSttTab() {
           <p className="card-title">Result</p>
 
           {result.skipped ? (
-            <div className="error-box">{result.reason ?? 'Skipped'}</div>
+            <div className="error-box">{result.reason ?? 'Skipped (DEBUG=true not set on server)'}</div>
           ) : (
             <>
-              <div className="kv-row">
-                <span className="kv-key">Transcript</span>
-                <span className="kv-val" style={{ fontStyle: 'italic' }}>
-                  {result.transcript || '(empty)'}
-                </span>
-              </div>
               <div className="kv-row">
                 <span className="kv-key">Word Overlap</span>
                 <span className="kv-val">
@@ -103,12 +97,10 @@ export default function DebugSttTab() {
                   }
                 </span>
               </div>
-              {result.story_text_preview && (
-                <div className="kv-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
-                  <span className="kv-key">Story Preview (first 300 chars)</span>
-                  <span style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{result.story_text_preview}</span>
-                </div>
-              )}
+              <p className="muted" style={{ marginTop: 10, fontSize: '.8rem' }}>
+                Note: transcript and story text are no longer returned in the response (privacy fix).
+                Word-overlap is computed server-side.
+              </p>
             </>
           )}
         </div>

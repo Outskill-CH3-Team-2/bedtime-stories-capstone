@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import type { SceneOutput } from '../api'
 
 interface Props {
@@ -6,13 +7,27 @@ interface Props {
   loading?: boolean
 }
 
+function useObjectUrl(b64: string, mime: string): string | null {
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!b64) { setUrl(null); return }
+    // Decode base64 → Blob → object URL to avoid keeping a long data-URI string in the DOM
+    const binary = atob(b64)
+    const bytes  = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+    const blob   = new Blob([bytes], { type: mime })
+    const objUrl = URL.createObjectURL(blob)
+    setUrl(objUrl)
+    return () => URL.revokeObjectURL(objUrl)
+  }, [b64, mime])
+
+  return url
+}
+
 export default function SceneDisplay({ scene, onChoice, loading = false }: Props) {
-  const audioSrc = scene.narration_audio_b64
-    ? `data:audio/wav;base64,${scene.narration_audio_b64}`
-    : null
-  const imageSrc = scene.illustration_b64
-    ? `data:image/png;base64,${scene.illustration_b64}`
-    : null
+  const audioUrl = useObjectUrl(scene.narration_audio_b64, 'audio/wav')
+  const imageUrl = useObjectUrl(scene.illustration_b64,    'image/png')
 
   return (
     <div className="scene-wrap">
@@ -34,18 +49,18 @@ export default function SceneDisplay({ scene, onChoice, loading = false }: Props
         <p className="story-text">{scene.story_text || '(no text)'}</p>
 
         {/* Audio + Image */}
-        {(audioSrc || imageSrc) && (
-          <div className="scene-media" style={{ gridTemplateColumns: imageSrc && audioSrc ? '1fr 1fr' : '1fr' }}>
-            {audioSrc && (
+        {(audioUrl || imageUrl) && (
+          <div className="scene-media" style={{ gridTemplateColumns: imageUrl && audioUrl ? '1fr 1fr' : '1fr' }}>
+            {audioUrl && (
               <div>
                 <p className="section-title">🔊 Narration</p>
-                <audio controls src={audioSrc} />
+                <audio controls src={audioUrl} />
               </div>
             )}
-            {imageSrc && (
+            {imageUrl && (
               <div>
                 <p className="section-title">🖼 Illustration</p>
-                <img className="scene-illustration" src={imageSrc} alt="Story illustration" />
+                <img className="scene-illustration" src={imageUrl} alt="Story illustration" />
               </div>
             )}
           </div>
