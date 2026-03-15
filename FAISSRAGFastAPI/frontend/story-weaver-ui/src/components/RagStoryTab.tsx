@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Sparkles, RotateCcw } from 'lucide-react'
-import { ragGenerate, storyGenerate, pollUntilDone } from '../api'
+import { ragGenerate, storyGenerate, pollUntilDone, sanitizeError } from '../api'
 import type { SceneOutput, StoryRequest } from '../api'
 import SceneDisplay from './SceneDisplay'
 
@@ -8,7 +8,32 @@ const VOICES      = ['alloy', 'echo', 'fable', 'nova', 'onyx', 'shimmer']
 const AGE_GROUPS  = ['3-5', '4-6', '5-7', '6-8']
 const LENGTHS     = ['5_minutes', '10_minutes', '15_minutes']
 
-interface Turn { scene: SceneOutput; jobId: string; choiceText: string }
+export interface Turn { scene: SceneOutput; jobId: string; choiceText: string }
+
+const LS_KEY    = 'story_weaver_last_turns'
+const LS_TTL_MS = 24 * 60 * 60 * 1000  // 1 day
+
+// Save only text fields — never persist base64 blobs to localStorage
+function saveTurns(childName: string, prompt: string, turns: Turn[]) {
+  try {
+    const slim = turns.map(t => ({
+      jobId:      t.jobId,
+      choiceText: t.choiceText,
+      scene: {
+        step_number:         t.scene.step_number,
+        story_text:          t.scene.story_text,
+        is_ending:           t.scene.is_ending,
+        safety_passed:       t.scene.safety_passed,
+        generation_time_ms:  t.scene.generation_time_ms,
+        session_id:          t.scene.session_id,
+        choices:             t.scene.choices.map(c => ({ id: c.id, text: c.text, audio_b64: '', image_b64: '' })),
+        illustration_b64:    '',
+        narration_audio_b64: '',
+      },
+    }))
+    localStorage.setItem(LS_KEY, JSON.stringify({ childName, title: prompt, turns: slim, expiresAt: Date.now() + LS_TTL_MS }))
+  } catch { /* ignore quota errors */ }
+}
 
 export default function RagStoryTab() {
   const [prompt,      setPrompt]      = useState('A dragon who is afraid of fire learns to be brave')
@@ -17,14 +42,20 @@ export default function RagStoryTab() {
   const [childName,   setChildName]   = useState('Sam')
   const [voice,       setVoice]       = useState('nova')
 
-  const [sessionId,   setSessionId]   = useState<string | null>(null)
-  const [prevJobId,   setPrevJobId]   = useState<string | null>(null)
-  const [turns,       setTurns]       = useState<Turn[]>([])
-  const [pollStatus,  setPollStatus]  = useState('')
-  const [loading,     setLoading]     = useState(false)
-  const [err,         setErr]         = useState('')
+  const [sessionId,     setSessionId]     = useState<string | null>(null)
+  const [prevJobId,     setPrevJobId]     = useState<string | null>(null)
+  const [turns,         setTurns]         = useState<Turn[]>([])
+  const [pollStatus,    setPollStatus]    = useState('')
+  const [loading,       setLoading]       = useState(false)
+  const [err,           setErr]           = useState('')
+  // AbortController ref — cancelled on unmount or reset
+  const abortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => { abortRef.current?.abort() }, [])
 
   async function startRagStory() {
+    abortRef.current?.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
     setLoading(true); setErr(''); setPollStatus('starting…')
     setTurns([]); setSessionId(null); setPrevJobId(null)
     try {
@@ -34,11 +65,13 @@ export default function RagStoryTab() {
       }
       const { session_id, job_id } = await ragGenerate(body)
       setSessionId(session_id)
-      const scene = await pollUntilDone(job_id, setPollStatus)
-      setTurns([{ scene, jobId: job_id, choiceText: '' }])
+      const scene = await pollUntilDone(job_id, setPollStatus, 1500, 180_000, ac.signal)
+      const newTurns: Turn[] = [{ scene, jobId: job_id, choiceText: '' }]
+      setTurns(newTurns)
       setPrevJobId(job_id)
+      saveTurns(childName || 'Friend', prompt, newTurns)
     } catch (e: any) {
-      setErr(e?.response?.data?.detail ?? e.message)
+      if ((e as DOMException).name !== 'AbortError') setErr(sanitizeError(e))
     } finally {
       setLoading(false); setPollStatus('')
     }
@@ -46,6 +79,9 @@ export default function RagStoryTab() {
 
   async function chooseOption(choiceText: string) {
     if (!sessionId) return
+    abortRef.current?.abort()
+    const ac = new AbortController()
+    abortRef.current = ac
     setLoading(true); setErr(''); setPollStatus('generating next scene…')
     try {
       const { job_id } = await storyGenerate({
@@ -54,18 +90,24 @@ export default function RagStoryTab() {
         prev_job_id: prevJobId ?? undefined,
         prev_choice_text: turns.at(-1)?.choiceText ?? '',
       })
-      const scene = await pollUntilDone(job_id, setPollStatus)
-      setTurns(prev => [...prev, { scene, jobId: job_id, choiceText }])
+      const scene = await pollUntilDone(job_id, setPollStatus, 1500, 180_000, ac.signal)
+      setTurns(prev => {
+        const updated = [...prev, { scene, jobId: job_id, choiceText }]
+        saveTurns(childName || 'Friend', prompt, updated)
+        return updated
+      })
       setPrevJobId(job_id)
     } catch (e: any) {
-      setErr(e?.response?.data?.detail ?? e.message)
+      if ((e as DOMException).name !== 'AbortError') setErr(sanitizeError(e))
     } finally {
       setLoading(false); setPollStatus('')
     }
   }
 
   function reset() {
-    setTurns([]); setSessionId(null); setPrevJobId(null); setErr(''); setPollStatus('')
+    abortRef.current?.abort()
+    setTurns([]); setSessionId(null); setPrevJobId(null)
+    setErr(''); setPollStatus('')
   }
 
   const hasStory = turns.length > 0
@@ -152,6 +194,7 @@ export default function RagStoryTab() {
           />
         </div>
       ))}
+
     </div>
   )
 }
