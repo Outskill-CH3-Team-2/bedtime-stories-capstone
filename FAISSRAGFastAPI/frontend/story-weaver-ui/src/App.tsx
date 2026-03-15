@@ -9,11 +9,11 @@ import DebugSttTab      from './components/DebugSttTab'
 type Tab = 'health' | 'story' | 'upload' | 'rag' | 'stt'
 
 const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
-  { id: 'health', label: 'Health',         icon: <Activity size={15} /> },
-  { id: 'story',  label: 'Story Pipeline', icon: <BookOpen size={15} /> },
-  { id: 'upload', label: 'RAG Upload',     icon: <Upload   size={15} /> },
-  { id: 'rag',    label: 'RAG Story',      icon: <Sparkles size={15} /> },
-  { id: 'stt',    label: 'Debug STT',      icon: <Mic      size={15} /> },
+  { id: 'health', label: 'Health',         icon: <Activity  size={15} /> },
+  { id: 'story',  label: 'Story Pipeline', icon: <BookOpen  size={15} /> },
+  { id: 'upload', label: 'RAG Upload',     icon: <Upload    size={15} /> },
+  { id: 'rag',    label: 'RAG Story',      icon: <Sparkles  size={15} /> },
+  { id: 'stt',    label: 'Debug STT',      icon: <Mic       size={15} /> },
 ]
 
 export default function App() {

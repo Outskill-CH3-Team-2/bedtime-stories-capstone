@@ -1,6 +1,19 @@
 import axios from 'axios'
 
-const api = axios.create({ baseURL: '' })
+const api = axios.create({ baseURL: '', timeout: 30_000 })
+
+// Sanitize error messages — strip internal paths/stack traces before showing to users
+export function sanitizeError(e: unknown): string {
+  const msg: string =
+    (e as any)?.response?.data?.detail ??
+    (e as any)?.message ??
+    'An unexpected error occurred.'
+  // Drop anything that looks like a file path or Python traceback
+  if (msg.includes('Traceback') || msg.includes('File "') || msg.length > 300) {
+    return 'The server returned an error. Please try again.'
+  }
+  return msg
+}
 
 // ── Shared types ──────────────────────────────────────────────────────────
 
@@ -84,12 +97,16 @@ export interface StoryRequest {
 
 export interface SttDebugResponse {
   job_id: string
-  transcript: string
-  story_text_preview: string
   word_overlap_pct: number
   match: boolean | null
   skipped?: boolean
   reason?: string
+}
+
+
+export interface DeleteFileResponse {
+  file_id: string
+  chunks_removed: number
 }
 
 // ── API calls ─────────────────────────────────────────────────────────────
@@ -120,6 +137,10 @@ export const uploadFile = (file: File) => {
 export const debugStt = (audio_b64: string, job_id = '', story_text = '') =>
   api.post<SttDebugResponse>('/story/debug/stt', { audio_b64, job_id, story_text }).then(r => r.data)
 
+export const deleteFile = (fileId: string) =>
+  api.delete<DeleteFileResponse>(`/api/v1/upload/${fileId}`).then(r => r.data)
+
+
 // ── Polling helper ────────────────────────────────────────────────────────
 
 export async function pollUntilDone(
@@ -127,14 +148,19 @@ export async function pollUntilDone(
   onStatus: (s: string) => void,
   intervalMs = 1500,
   timeoutMs  = 180_000,
+  signal?: AbortSignal,
 ): Promise<SceneOutput> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
+    if (signal?.aborted) throw new DOMException('Polling cancelled', 'AbortError')
     const { status } = await getJobStatus(jobId)
     onStatus(status)
     if (status === 'complete') return getJobResult(jobId)
     if (status === 'failed')   throw new Error('Pipeline reported status: failed')
-    await new Promise(r => setTimeout(r, intervalMs))
+    await new Promise<void>((resolve, reject) => {
+      const tid = setTimeout(resolve, intervalMs)
+      signal?.addEventListener('abort', () => { clearTimeout(tid); reject(new DOMException('Polling cancelled', 'AbortError')) }, { once: true })
+    })
   }
   throw new Error('Polling timed out after 3 minutes')
 }
