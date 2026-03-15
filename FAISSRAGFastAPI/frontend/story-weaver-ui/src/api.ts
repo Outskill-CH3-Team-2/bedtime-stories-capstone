@@ -128,10 +128,12 @@ export const getJobResult  = (id: string) => api.get<SceneOutput>(`/story/result
 
 export const ragGenerate   = (body: StoryRequest) => api.post<GenerateResponse>('/api/v1/generate', body).then(r => r.data)
 
-export const uploadFile = (file: File) => {
+export const uploadFile = async (file: File): Promise<UploadResponse> => {
   const fd = new FormData()
   fd.append('file', file)
-  return api.post<UploadResponse>('/api/v1/upload', fd).then(r => r.data)
+  // Upload + parse + embed + FAISS index can take several minutes for large files
+  const res = await api.post<UploadResponse>('/api/v1/upload', fd, { timeout: 600_000 })
+  return res.data
 }
 
 export const debugStt = (audio_b64: string, job_id = '', story_text = '') =>

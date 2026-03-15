@@ -1,31 +1,31 @@
 import { useState, type ReactNode } from 'react'
-import { Activity, BookOpen, Upload, Sparkles, Mic } from 'lucide-react'
-import HealthTab        from './components/HealthTab'
-import StoryPipelineTab from './components/StoryPipelineTab'
-import RagUploadTab     from './components/RagUploadTab'
-import RagStoryTab      from './components/RagStoryTab'
-import DebugSttTab      from './components/DebugSttTab'
+import { Upload } from 'lucide-react'
+import RagUploadTab from './components/RagUploadTab'
 
-type Tab = 'health' | 'story' | 'upload' | 'rag' | 'stt'
+// Hidden tabs (re-enable by adding back to TABS and imports):
+// import { Activity, BookOpen, Mic, Sparkles } from 'lucide-react'
+// import HealthTab        from './components/HealthTab'
+// import StoryPipelineTab from './components/StoryPipelineTab'
+// import DebugSttTab      from './components/DebugSttTab'
+// import RagStoryTab      from './components/RagStoryTab'
+// { id: 'rag', label: 'RAG Story', icon: <Sparkles size={15} /> }
+
+type Tab = 'upload'
 
 const TABS: { id: Tab; label: string; icon: ReactNode }[] = [
-  { id: 'health', label: 'Health',         icon: <Activity  size={15} /> },
-  { id: 'story',  label: 'Story Pipeline', icon: <BookOpen  size={15} /> },
-  { id: 'upload', label: 'RAG Upload',     icon: <Upload    size={15} /> },
-  { id: 'rag',    label: 'RAG Story',      icon: <Sparkles  size={15} /> },
-  { id: 'stt',    label: 'Debug STT',      icon: <Mic       size={15} /> },
+  { id: 'upload', label: 'Generate Stories from PDF', icon: <Upload size={15} /> },
 ]
 
 export default function App() {
-  const [active, setActive] = useState<Tab>('health')
+  const [active, setActive] = useState<Tab>('upload')
 
   return (
     <div className="app">
       <header className="app-header">
-        <span style={{ fontSize: '1.4rem' }}>🌙</span>
+        <span style={{ fontSize: '1.5rem', lineHeight: 1 }}>✦</span>
         <div>
-          <h1>Story Weaver API Tester</h1>
-          <span className="subtitle">backend · localhost:8000</span>
+          <h1>Dream Weaver</h1>
+          <span className="subtitle">Parent Dashboard · localhost:8000</span>
         </div>
       </header>
 
@@ -42,11 +42,7 @@ export default function App() {
       </nav>
 
       <main className="tab-content">
-        {active === 'health' && <HealthTab />}
-        {active === 'story'  && <StoryPipelineTab />}
         {active === 'upload' && <RagUploadTab />}
-        {active === 'rag'    && <RagStoryTab />}
-        {active === 'stt'    && <DebugSttTab />}
       </main>
     </div>
   )
