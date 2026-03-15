@@ -1,5 +1,7 @@
+import asyncio
 import io
 import os
+import re
 import base64
 import uuid
 import json
@@ -11,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional, Annotated
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File, Depends
+from fastapi import FastAPI, HTTPException, UploadFile, File, Depends
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel as _BaseModel, Field
@@ -229,9 +231,32 @@ def parse_document(file_path: Path) -> list[dict[str, Any]]:
     return pages
 
 
+def _cleanup_stale_uploads(max_age_hours: int = 1) -> None:
+    """Delete any files in UPLOAD_DIR older than max_age_hours.
+
+    This catches uploads left behind by a previous process that crashed
+    before it could delete them after FAISS indexing.
+    """
+    import time as _time
+    if not UPLOAD_DIR.exists():
+        return
+    cutoff = _time.time() - max_age_hours * 3600
+    removed = 0
+    for f in UPLOAD_DIR.iterdir():
+        if f.is_file() and f.stat().st_mtime < cutoff:
+            try:
+                f.unlink()
+                removed += 1
+            except OSError:
+                pass
+    if removed:
+        logger.info(f"[startup] Removed {removed} stale upload(s) older than {max_age_hours}h.")
+
+
 def _init_rag_services() -> None:
     global _vs_instance
     UPLOAD_DIR.mkdir(exist_ok=True)
+    _cleanup_stale_uploads()
     if _RAG_IMPORT_ERROR is not None:
         # Log the specific missing package so it's actionable from startup logs
         logger.warning(
@@ -251,13 +276,41 @@ def _init_rag_services() -> None:
         _vs_instance = None
 
 
+_RAG_INJECTION_PATTERNS = re.compile(
+    r"ignore\s+(all\s+)?previous\s+instructions?"
+    r"|disregard\s+(all\s+)?previous"
+    r"|forget\s+(all\s+)?previous"
+    r"|you\s+are\s+now"
+    r"|act\s+as\s+(?:if\s+)?(?:a|an|the)\s+\w+"
+    r"|pretend\s+(?:you\s+are|to\s+be)"
+    r"|your\s+new\s+(?:role|persona|instructions?)"
+    r"|<\s*system\s*>"
+    r"|\[\s*system\s*\]"
+    r"|jailbreak"
+    r"|developer\s+mode",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_rag_chunk(chunk: str) -> str:
+    """Strip prompt-injection patterns from a RAG-retrieved text chunk."""
+    if _RAG_INJECTION_PATTERNS.search(chunk):
+        logger.warning("[RAG] Injection pattern detected in retrieved chunk — chunk removed.")
+        return ""
+    # Also strip HTML and control characters (same as filters.py)
+    chunk = re.sub(r"<[^>]+>", "", chunk)
+    chunk = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", chunk)
+    return chunk.strip()
+
+
 async def _fetch_rag_context(query: str) -> str | None:
     """
-    Run a similarity search against the FAISS store and return a formatted
+    Run a similarity search against the FAISS store and return a sanitized
     context string for injection into the story pipeline.
 
-    Returns None if RAG is unavailable or the index is empty — the caller
-    should treat None as "no context" and proceed without it.
+    Each retrieved chunk is screened for prompt-injection patterns before
+    being included.  Returns None if RAG is unavailable, the index is empty,
+    or all chunks are filtered out.
     """
     if _vs_instance is None or _vs_instance.model_status != "ready":
         return None
@@ -267,8 +320,14 @@ async def _fetch_rag_context(query: str) -> str | None:
         hits = await run_in_threadpool(_vs_instance.similarity_search, query, 5)
         if not hits:
             return None
-        context = "\n---\n".join(h["content"] for h in hits)
-        logger.info(f"[RAG] Retrieved {len(hits)} chunks for query: {query[:60]!r}")
+        # Sanitize every chunk before injection
+        clean_chunks = [_sanitize_rag_chunk(h["content"]) for h in hits]
+        clean_chunks = [c for c in clean_chunks if c]
+        if not clean_chunks:
+            logger.warning("[RAG] All retrieved chunks were filtered — skipping context injection.")
+            return None
+        context = "\n---\n".join(clean_chunks)
+        logger.info(f"[RAG] Retrieved {len(clean_chunks)}/{len(hits)} clean chunks")
         return context
     except Exception as e:
         logger.warning(f"[RAG] similarity_search failed: {type(e).__name__}: {e}")
@@ -332,7 +391,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
     allow_credentials=False,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],
 )
 
@@ -458,7 +517,7 @@ async def root():
 
 
 @app.post("/story/start")
-async def story_start(config: ChildConfig, background_tasks: BackgroundTasks):
+async def story_start(config: ChildConfig):
     """Simple story-start endpoint: accepts ChildConfig, returns session_id + job_id."""
     safe_config = sanitize_input(config)
     state = StoryState(config=safe_config)
@@ -466,16 +525,15 @@ async def story_start(config: ChildConfig, background_tasks: BackgroundTasks):
 
     job = job_store.create(state.session_id)
 
-    if MOCK_PIPELINES:
-        background_tasks.add_task(_mock_pipeline_task, job.job_id, state.session_id)
-    else:
-        background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, "")
+    coro = _mock_pipeline_task(job.job_id, state.session_id) if MOCK_PIPELINES \
+        else run_pipeline_task(job.job_id, state.session_id, "")
+    job_store.register_task(state.session_id, asyncio.create_task(coro))
 
     return {"session_id": state.session_id, "job_id": job.job_id, "step_number": state.step_number}
 
 
 @app.post("/story/choose")
-async def story_choose(request: StoryChooseRequest, background_tasks: BackgroundTasks):
+async def story_choose(request: StoryChooseRequest):
     """Advance the story by committing a choice and firing the next generation."""
     state = session_store.get(request.session_id)
     if not state:
@@ -487,10 +545,9 @@ async def story_choose(request: StoryChooseRequest, background_tasks: Background
 
     job = job_store.create(state.session_id)
 
-    if MOCK_PIPELINES:
-        background_tasks.add_task(_mock_pipeline_task, job.job_id, request.session_id)
-    else:
-        background_tasks.add_task(run_pipeline_task, job.job_id, request.session_id, request.choice_text)
+    coro = _mock_pipeline_task(job.job_id, request.session_id) if MOCK_PIPELINES \
+        else run_pipeline_task(job.job_id, request.session_id, request.choice_text)
+    job_store.register_task(request.session_id, asyncio.create_task(coro))
 
     return {"step_number": state.step_number, "session_id": request.session_id, "job_id": job.job_id}
 
@@ -500,7 +557,7 @@ async def story_choose(request: StoryChooseRequest, background_tasks: Background
 # ---------------------------------------------------------------------------
 
 @app.post("/generate/start")
-async def legacy_generate_start(background_tasks: BackgroundTasks):
+async def legacy_generate_start():
     """Legacy stub: creates a default session and fires a generation job."""
     config = ChildConfig(child_name="Friend", child_age=5)
     state = StoryState(config=config)
@@ -508,10 +565,9 @@ async def legacy_generate_start(background_tasks: BackgroundTasks):
 
     job = job_store.create(state.session_id)
 
-    if MOCK_PIPELINES:
-        background_tasks.add_task(_mock_pipeline_task, job.job_id, state.session_id)
-    else:
-        background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, "")
+    coro = _mock_pipeline_task(job.job_id, state.session_id) if MOCK_PIPELINES \
+        else run_pipeline_task(job.job_id, state.session_id, "")
+    job_store.register_task(state.session_id, asyncio.create_task(coro))
 
     return {"session_id": state.session_id, "job_id": job.job_id}
 
@@ -526,7 +582,7 @@ async def legacy_get_status(id: str):
 
 
 @app.post("/story/generate", response_model=GenerateResponse)
-async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
+async def generate(request: GenerateRequest):
     """
     Unified generate endpoint for first chapter AND subsequent chapters.
 
@@ -617,7 +673,10 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
     # ── Create job and fire ────────────────────────────────────────────────
     job = job_store.create(state.session_id)
     branch_choice = request.choice_text or ""
-    background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, branch_choice)
+    # Use asyncio.create_task so we can register the task for cancellation when
+    # the session expires (BackgroundTasks provides no handle for this).
+    task = asyncio.create_task(run_pipeline_task(job.job_id, state.session_id, branch_choice))
+    job_store.register_task(state.session_id, task)
 
     print(f"[API] Job {job.job_id} queued for session {state.session_id} step={state.step_number} choice_len={len(branch_choice)}")
     return GenerateResponse(session_id=state.session_id, job_id=job.job_id)
@@ -669,6 +728,92 @@ async def get_result(id: str):
 
 
 # ---------------------------------------------------------------------------
+# Export endpoints — PDF and Video
+# ---------------------------------------------------------------------------
+
+from fastapi.responses import Response as _Response
+from backend.export.models import ExportRequest
+
+
+@app.post("/story/export/pdf")
+async def export_pdf(req: ExportRequest):
+    """
+    Generate a storybook PDF from the completed scenes provided by the client.
+
+    Request body: ExportRequest (title, child_name, scenes[]).
+    Each scene carries step_number, story_text, and optionally illustration_b64.
+
+    Returns: PDF file as application/pdf with a Content-Disposition attachment header.
+    """
+    try:
+        from backend.export.pdf_export import generate_pdf
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    try:
+        pdf_bytes = await run_in_threadpool(
+            generate_pdf,
+            req.title,
+            req.child_name,
+            req.scenes,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"[export/pdf] generation failed: {exc}")
+        raise HTTPException(status_code=500, detail="PDF generation failed — check server logs.")
+
+    safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in req.title)[:60]
+    filename   = f"{safe_title or 'story'}.pdf"
+    return _Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/story/export/video")
+async def export_video(req: ExportRequest):
+    """
+    Generate a storybook slideshow MP4 from the completed scenes provided by the client.
+
+    Request body: ExportRequest (title, child_name, scenes[]).
+    Each scene carries step_number, story_text, illustration_b64, and optionally
+    narration_audio_b64 (WAV).  When audio is present the scene clip lasts exactly
+    as long as the narration; otherwise it defaults to 8 seconds.
+
+    Returns: MP4 file as video/mp4 with a Content-Disposition attachment header.
+
+    Note: Requires moviepy and ffmpeg to be installed on the server.
+    """
+    try:
+        from backend.export.video_export import generate_video
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    try:
+        mp4_bytes = await run_in_threadpool(
+            generate_video,
+            req.title,
+            req.child_name,
+            req.scenes,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        logger.error(f"[export/video] generation failed: {exc}")
+        raise HTTPException(status_code=500, detail="Video generation failed — check server logs.")
+
+    safe_title = "".join(c if c.isalnum() or c in " _-" else "_" for c in req.title)[:60]
+    filename   = f"{safe_title or 'story'}.mp4"
+    return _Response(
+        content=mp4_bytes,
+        media_type="video/mp4",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
 # Debug: STT transcription endpoint (temporary diagnostic)
 # ---------------------------------------------------------------------------
 
@@ -683,8 +828,11 @@ async def debug_stt(req: SttRequest):
     """
     Transcribe the given WAV audio (base64) with Whisper and compare to story_text.
     Returns transcript + whether it matches the story_text (word-overlap %).
-    Temporary diagnostic — remove once audio bug is confirmed fixed.
+
+    Only available when DEBUG=true — returns 404 in production.
     """
+    if os.getenv("DEBUG", "").lower() != "true":
+        raise HTTPException(status_code=404, detail="Not found")
     try:
         wav_bytes = base64.b64decode(req.audio_b64)
     except Exception as e:
@@ -735,16 +883,12 @@ async def debug_stt(req: SttRequest):
         overlap = 1.0
 
     print(
-        f"\n[debug/stt] job={req.job_id}\n"
-        f"  TRANSCRIPT : {transcript[:300]!r}\n"
-        f"  STORY_TEXT : {req.story_text[:300]!r}\n"
-        f"  WORD_OVERLAP: {overlap:.0%}\n"
+        f"[debug/stt] job={req.job_id} word_overlap={overlap:.0%} "
+        f"transcript_len={len(transcript)} story_len={len(req.story_text)}"
     )
 
     return {
         "job_id": req.job_id,
-        "transcript": transcript,
-        "story_text_preview": req.story_text[:300],
         "word_overlap_pct": round(overlap * 100, 1),
         "match": overlap > 0.4,
     }
@@ -853,7 +997,6 @@ async def delete_file(
 @app.post("/api/v1/generate", response_model=GenerateResponse)
 async def generate_rag_story(
     req: StoryRequest,
-    background_tasks: BackgroundTasks,
 ):
     """
     RAG-enhanced story generation using the full Story Weaver pipeline.
@@ -899,10 +1042,9 @@ async def generate_rag_story(
 
     job = job_store.create(state.session_id)
 
-    if MOCK_PIPELINES:
-        background_tasks.add_task(_mock_pipeline_task, job.job_id, state.session_id)
-    else:
-        background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, "")
+    coro = _mock_pipeline_task(job.job_id, state.session_id) if MOCK_PIPELINES \
+        else run_pipeline_task(job.job_id, state.session_id, "")
+    job_store.register_task(state.session_id, asyncio.create_task(coro))
 
     logger.info(
         f"[RAG→pipeline] session={state.session_id} job={job.job_id} "
