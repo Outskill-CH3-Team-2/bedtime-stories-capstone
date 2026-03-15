@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Optional
+from typing import Optional, Set
 
 from backend.contracts import StoryState, JobState
 
@@ -106,6 +106,12 @@ class JobStore:
     In-memory store for generation jobs (job_id → JobState).
     Jobs expire with their parent session (TTL reuses SESSION_TTL_SECONDS).
     A background cleanup task runs on the same interval as SessionStore.
+
+    Task registry
+    -------------
+    register_task(session_id, task) associates an asyncio.Task with a session.
+    cancel_session_tasks(session_id) cancels all registered tasks for that
+    session — called automatically on prune / manual delete.
     """
 
     def __init__(self) -> None:
@@ -113,7 +119,27 @@ class JobStore:
         # Maps session_id → latest job_id so callers can look up by session.
         # Populated by create() and cleaned up by prune() — never leaks.
         self._session_latest: dict[str, str] = {}
+        # Maps session_id → set of active asyncio.Tasks
+        self._session_tasks: dict[str, Set[asyncio.Task]] = {}
         self._cleanup_task: Optional[asyncio.Task] = None
+
+    def register_task(self, session_id: str, task: asyncio.Task) -> None:
+        """Track an asyncio.Task so it can be cancelled when the session expires."""
+        self._session_tasks.setdefault(session_id, set()).add(task)
+        # Remove the task from the set automatically when it completes
+        task.add_done_callback(
+            lambda t: self._session_tasks.get(session_id, set()).discard(t)
+        )
+
+    def cancel_session_tasks(self, session_id: str) -> int:
+        """Cancel all pending tasks for session_id.  Returns number cancelled."""
+        tasks = self._session_tasks.pop(session_id, set())
+        cancelled = 0
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+                cancelled += 1
+        return cancelled
 
     def create(self, session_id: str) -> JobState:
         """Create a new PENDING job for session_id, store it, return it."""
@@ -149,12 +175,20 @@ class JobStore:
         now = time.monotonic()
         expired = [(jid, job) for jid, (job, ts) in self._store.items()
                    if now - ts > SESSION_TTL_SECONDS]
+        cancelled_total = 0
+        seen_sessions: set[str] = set()
         for jid, job in expired:
             del self._store[jid]
             if self._session_latest.get(job.session_id) == jid:
                 del self._session_latest[job.session_id]
+            if job.session_id not in seen_sessions:
+                seen_sessions.add(job.session_id)
+                cancelled_total += self.cancel_session_tasks(job.session_id)
         if expired:
-            print(f"[job_store] Pruned {len(expired)} expired job(s).")
+            print(
+                f"[job_store] Pruned {len(expired)} expired job(s)"
+                + (f", cancelled {cancelled_total} task(s)." if cancelled_total else ".")
+            )
 
     async def _cleanup_loop(self) -> None:
         while True:
