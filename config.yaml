@@ -1,21 +1,100 @@
 # config.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# SIDE CHARACTER CONTRACT (read before editing)
+# ─────────────────────────────────────────────────────────────────────────────
+# The backend flattens `side_characters` into a single rendered block that is
+# injected into the story prompt as {side_characters_block}.
+#
+# Each entry MUST have:
+#   name     : the character's first name or nickname
+#   relation : how they relate to the child  (e.g. "dad", "best friend")
+#   fun_fact : one short, vivid detail the AI can use in the story
+#              Keep it concrete and sensory — "loves soccer" beats "active".
+#
+# Each entry MAY have:
+#   picture  : URL to a portrait — used by the UI only, ignored by the LLM
+#
+# The backend renders the block like this (example):
+#
+#   AVAILABLE SIDE CHARACTERS:
+#   - dad         | John       | loves kicking a soccer ball after work
+#   - mom         | Jane       | always smells of warm, fresh-baked cookies
+#   - sister      | Lily       | collects shiny blue things like a magpie
+#   - best friend | Sam        | has a laugh so loud it fills the whole room
+#
+# If `side_characters` is empty or absent, the block becomes:
+#   AVAILABLE SIDE CHARACTERS: none provided — invent one warm, named helper.
+# ─────────────────────────────────────────────────────────────────────────────
+
 
 # --- Child's Information ---
-# 'name' and 'age' are mandatory.
+# `name` and `age` are mandatory.
 child_info:
   name: "Marton"
   age: 5
 
+
 # --- Personalization Details ---
-# These details help the AI weave a custom story.
+# Woven directly into story prose. Keep values short and concrete.
 personalization:
   favourite_colour: "yellow"
-  favourite_food: "marshmallows"
+  favourite_food:   "marshmallows"
   favourite_animal: "pig"
-  pet_name: "Pip"
-  pet_type: "hamster"
-  place_to_visit: "Starbucks"
+  pet_name:         "Pip"
+  pet_type:         "hamster"
+  place_to_visit:   "Starbucks"
   favourite_activities:
     - "building tall towers"
     - "running fast"
     - "singing"
+
+
+# --- Side Characters ---
+# Flat list. Every entry needs: name, relation, fun_fact.
+# `picture` is optional and LLM-invisible (UI only).
+side_characters:
+
+  # Family
+  - name:     "John"
+    relation: "dad"
+    fun_fact: "loves kicking a soccer ball after work"
+    picture:  "https://example.com/john.png"   # UI only
+
+  - name:     "Jane"
+    relation: "mom"
+    fun_fact: "always baking something that makes the whole house smell sweet"
+
+  - name:     "Lily"
+    relation: "big sister"
+    fun_fact: "collects shiny blue things and knows all their names"
+
+  - name:     "Max"
+    relation: "little brother"
+    fun_fact: "roars like an elephant when he gets excited"
+
+  # Grandparents
+  - name:     "Grandpa Joe"
+    relation: "grandfather"
+    fun_fact: "makes the best apple pie and always saves the first slice for Marton"
+
+  - name:     "Grandma Sue"
+    relation: "grandmother"
+    fun_fact: "has a garden full of talking-to flowers every morning"
+
+  # Friends
+  - name:     "Sam"
+    relation: "best friend"
+    fun_fact:  "has a laugh so loud it bounces off the walls"
+    picture:  "https://example.com/sam.jpg"    # UI only
+
+  - name:     "Emma"
+    relation: "neighbour"
+    fun_fact: "owns a fluffy white rabbit named Cotton who follows her everywhere"
+
+
+# --- Character Portrait Assets ---
+# Centralised map for UI lookups. Keys must match `name` values above.
+# The story prompt system never reads this block.
+character_assets:
+  John:  "https://example.com/john.png"
+  Sam:   "https://example.com/sam.jpg"
