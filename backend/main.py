@@ -9,6 +9,7 @@ from backend.contracts import (
     StoryState, StoryStatus,
     GenerateRequest, GenerateResponse,
     CharacterRef, AddCharacterRequest,
+    AvatarRequest, AvatarResponse,
     ChildConfig, SceneOutput, Choice,
 )
 from backend.orchestrator.pipeline import process_scene
@@ -268,8 +269,8 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
             messages=[{"role": "user", "content": f"The story idea is: {request.story_idea}"}],
         )
 
-        # Register protagonist: server-loaded image > request payload > nothing
-        ref_image = _protagonist_image_b64 or request.protagonist_image_b64
+        # Register protagonist: frontend-uploaded photo > server dev fixture > nothing
+        ref_image = request.protagonist_image_b64 or _protagonist_image_b64
         if ref_image:
             state.characters[safe_config.child_name.lower()] = CharacterRef(
                 name=safe_config.child_name,
@@ -340,6 +341,40 @@ async def add_character(request: AddCharacterRequest):
     session_store.set(request.session_id, state)
     print(f"[API] Character '{char.name}' ({char.role}) added to session {request.session_id}")
     return {"status": "ok", "character": char.name}
+
+
+@app.post("/story/avatar", response_model=AvatarResponse)
+async def generate_avatar(request: AvatarRequest):
+    """
+    Generate a storybook portrait for a named side character.
+
+    Called when a family member is configured but has no uploaded reference photo.
+    The image is returned as a data-URI; the caller should then register it via
+    POST /story/character so the image pipeline can keep this character consistent.
+    """
+    from backend.pipelines.image import generate_image
+    import base64
+
+    name     = request.name.strip()[:30] or "Character"
+    relation = request.relation.strip()[:30]
+    desc     = request.description.strip()[:80]
+
+    relation_clause = f", who is {relation} in the family" if relation else ""
+    desc_clause     = f" {desc}" if desc else ""
+
+    prompt = (
+        f"Children's storybook portrait illustration of a character named {name}"
+        f"{relation_clause}.{desc_clause} "
+        f"Show just the face and upper body, warm friendly expression. "
+        f"Style: soft watercolor children's book illustration, no background text."
+    )
+
+    image_bytes = await generate_image(prompt, characters=None)
+    if not image_bytes:
+        raise HTTPException(status_code=500, detail="Avatar generation failed — please try again.")
+
+    b64 = base64.b64encode(image_bytes).decode()
+    return AvatarResponse(image_b64=f"data:image/png;base64,{b64}")
 
 
 def _resolve_job(id: str):

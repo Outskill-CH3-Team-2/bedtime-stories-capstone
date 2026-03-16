@@ -1,6 +1,91 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { StoryState, Scene, Choice, PrefiredJob, StoryConfig, DEFAULT_CONFIG } from './types';
+import { StoryState, Scene, Choice, PrefiredJob, StoryConfig, DEFAULT_CONFIG, FamilyMember } from './types';
 import { storyService } from './services/storyService';
+
+// Migrates saved configs from older formats to the current shape
+function migrateConfig(raw: any): StoryConfig {
+  const base: StoryConfig = { ...DEFAULT_CONFIG, ...raw };
+
+  // ── Favorites: old string → new string[] ─────────────────────────────────
+  if (!Array.isArray(base.favoriteFoods)) {
+    const old = (raw.favoriteFood || raw.favoriteFoods || '') as string;
+    base.favoriteFoods = old ? [old] : [];
+  }
+  if (!Array.isArray(base.favoriteColors)) {
+    const old = (raw.favoriteColor || raw.favoriteColors || '') as string;
+    base.favoriteColors = old ? [old] : [];
+  }
+  if (!Array.isArray(base.favoriteActivities)) {
+    const old = (raw.favoriteActivity || raw.favoriteActivities || '') as string;
+    base.favoriteActivities = old ? [old] : [];
+  }
+
+  // ── Family arrays ─────────────────────────────────────────────────────────
+  if (typeof raw.siblings === 'string') base.siblings = [];
+  if (typeof raw.parents === 'string') base.parents = DEFAULT_CONFIG.parents;
+  if (typeof raw.grandparents === 'string') base.grandparents = DEFAULT_CONFIG.grandparents;
+  if (typeof raw.privacyAcknowledged !== 'boolean') base.privacyAcknowledged = false;
+
+  const toMembers = (arr: any[]): FamilyMember[] =>
+    arr.filter(m => m && typeof m === 'object').map(m => ({
+      name:       typeof m.name       === 'string' ? m.name       : '',
+      relation:   typeof m.relation   === 'string' ? m.relation   : '',
+      age:        typeof m.age        === 'string' ? m.age        : (m.age != null ? String(m.age) : ''),
+      photo:      typeof m.photo      === 'string' ? m.photo      : undefined,
+      favourites: typeof m.favourites === 'string' ? m.favourites : '',
+    }));
+  base.siblings     = toMembers(base.siblings     as any[]);
+  base.parents      = toMembers(base.parents      as any[]);
+  base.grandparents = toMembers(base.grandparents as any[]);
+
+  // ── Companions: migrate old petName/petType/friendName → companions array ─
+  if (!Array.isArray(base.companions) || base.companions.length === 0) {
+    const companions: FamilyMember[] = [];
+    const petName    = (raw.petName    || '') as string;
+    const petType    = (raw.petType    || 'Pet') as string;
+    const friendName = (raw.friendName || '') as string;
+    companions.push({ name: petName,    relation: petType || 'Pet',         age: '', favourites: '' });
+    companions.push({ name: friendName, relation: 'Best Friend',            age: '', favourites: '' });
+    base.companions = companions;
+  } else {
+    base.companions = toMembers(base.companions as any[]);
+  }
+
+  return base;
+}
+
+/**
+ * For each named family member: register their reference image with the backend.
+ * If they have an uploaded photo, register it directly.
+ * If not, call /story/avatar to generate a storybook portrait then register that.
+ * Runs entirely in the background — does NOT block story display.
+ */
+async function registerSideCharacters(sessionId: string, config: StoryConfig): Promise<void> {
+  const members: FamilyMember[] = [
+    ...config.siblings,
+    ...config.parents,
+    ...config.grandparents,
+  ].filter(m => m.name.trim());
+
+  for (const member of members) {
+    try {
+      let imageB64 = member.photo;
+      if (!imageB64) {
+        console.log(`[App] Generating avatar for ${member.name} (${member.relation})…`);
+        imageB64 = await storyService.generateAvatar(member.name, member.relation);
+      }
+      await storyService.addCharacter(sessionId, {
+        name:        member.name,
+        role:        'side',
+        image_b64:   imageB64,
+        description: member.relation,
+      });
+      console.log(`[App] Registered side character: ${member.name}`);
+    } catch (err) {
+      console.warn(`[App] Could not register ${member.name}:`, err);
+    }
+  }
+}
 import Book from './components/Book';
 import ConfigurationPage from './components/ConfigurationPage';
 import LandingCanvas from './components/LandingCanvas';
@@ -177,7 +262,7 @@ const App: React.FC = () => {
     storyService.loadConfig().then((loaded) => {
       if (loaded && loaded.childName) {
         console.log('[App] Loaded saved configuration from IDB');
-        setConfig(loaded);
+        setConfig(migrateConfig(loaded));
       } else {
         console.log('[App] No saved config found — opening configuration screen');
         setShowConfig(true);
@@ -287,6 +372,11 @@ const App: React.FC = () => {
       const { sessionId, jobId } = await storyService.startStory(idea, childInfo);
       setState(prev => ({ ...prev, sessionId, status: 'polling' }));
       startPolling(jobId, true);
+
+      // Background: register side characters while intro video plays
+      registerSideCharacters(sessionId, config).catch(err =>
+        console.warn('[App] Side character registration error:', err)
+      );
     } catch (err: any) {
       setState(prev => ({ ...prev, status: 'error', error: err.message }));
     }
@@ -382,18 +472,14 @@ const App: React.FC = () => {
         transition: 'background 1.5s ease',
       }} />
 
-      {/* Very faint paper texture overlay */}
-      <div style={{
-        position: 'absolute', inset: 0,
-        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='300' height='300'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='300' height='300' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E")`,
-        backgroundRepeat: 'repeat',
-        opacity: state.status === 'idle' ? 0.3 : 0.6,
-        pointerEvents: 'none',
-        transition: 'opacity 1.5s ease',
-      }} />
+      {/* Very faint paper texture overlay — class-based so the data-URI isn't rebuilt every render */}
+      <div
+        className="paper-noise"
+        style={{ opacity: state.status === 'idle' ? 0.3 : 0.6 }}
+      />
 
-      {/* Canvas particle layer — lightweight starry dust in idle state */}
-      {state.status === 'idle' && <LandingCanvas paused={animPaused} />}
+      {/* CSS particle layer — pause when config modal is open (no animated content under backdrop-filter) */}
+      {state.status === 'idle' && <LandingCanvas paused={animPaused || showConfig} />}
 
       <audio ref={audioRef} style={{ display: 'none' }} />
 

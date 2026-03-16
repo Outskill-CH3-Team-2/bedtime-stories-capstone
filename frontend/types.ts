@@ -27,32 +27,56 @@ export interface StoryState {
   error: string | null;
 }
 
+export interface FamilyMember {
+  name: string;
+  relation: string;
+  age?: string;
+  photo?: string; // base64 data URI — optional reference picture
+  favourites?: string; // short free-text, e.g. "loves pizza and dinosaurs"
+}
+
 export interface StoryConfig {
   childName: string;
   age: number | string;
-  favoriteFood: string;
-  favoriteColor: string;
-  favoriteActivity: string;
-  petName: string;
-  petType: string;
-  friendName: string;
-  siblings: string;
-  parents: string;
-  grandparents: string;
+  // ── Favorites (multi-select arrays) ──────────────────────────────────────
+  favoriteFoods: string[];
+  favoriteColors: string[];
+  favoriteActivities: string[];
+  // ── Companions (pets, friends — open-ended carousel) ─────────────────────
+  companions: FamilyMember[];
+  // ── Family ───────────────────────────────────────────────────────────────
+  siblings: FamilyMember[];
+  parents: FamilyMember[];
+  grandparents: FamilyMember[];
   childPhoto: string;
+  privacyAcknowledged: boolean;
+  // Legacy fields kept for migration / backward-compat
+  petName?: string;
+  petType?: string;
+  friendName?: string;
 }
 
 export const DEFAULT_CONFIG: StoryConfig = {
   childName: '',
   age: '',
-  favoriteFood: '',
-  favoriteColor: '',
-  favoriteActivity: '',
-  petName: '',
-  petType: '',
-  friendName: '',
-  siblings: '',
-  parents: '',
-  grandparents: '',
+  favoriteFoods: [],
+  favoriteColors: [],
+  favoriteActivities: [],
+  companions: [
+    { name: '', relation: 'Pet', age: '', favourites: '' },
+    { name: '', relation: 'Best Friend', age: '', favourites: '' },
+  ],
+  siblings: [],
+  parents: [
+    { name: '', relation: 'Mother', age: '', favourites: '' },
+    { name: '', relation: 'Father', age: '', favourites: '' },
+  ],
+  grandparents: [
+    { name: '', relation: 'Grandma', age: '', favourites: '' },
+    { name: '', relation: 'Grandpa', age: '', favourites: '' },
+    { name: '', relation: 'Grandma', age: '', favourites: '' },
+    { name: '', relation: 'Grandpa', age: '', favourites: '' },
+  ],
   childPhoto: '',
+  privacyAcknowledged: false,
 };

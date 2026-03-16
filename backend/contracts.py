@@ -9,14 +9,23 @@ import uuid
 
 # --- Core Configuration Models ---
 
+class FamilyMemberInfo(BaseModel):
+    name: str = ""
+    relation: str = ""
+
 class Personalization(BaseModel):
     favourite_colour: str = ""
     favourite_animal: str = ""
     favourite_food: str = ""
-    favourite_activities: List[str] = []
+    favourite_activity: str = ""          # single activity from frontend
+    favourite_activities: List[str] = []  # legacy list form
     pet_name: str = ""
     pet_type: str = ""
     place_to_visit: str = ""
+    friend_name: str = ""
+    siblings: List[FamilyMemberInfo] = []
+    parents: List[FamilyMemberInfo] = []
+    grandparents: List[FamilyMemberInfo] = []
 
 class ChildConfig(BaseModel):
     child_name: str = Field(..., max_length=30)
@@ -80,6 +89,15 @@ class AddCharacterRequest(BaseModel):
     """Add a side-character reference to an existing session."""
     session_id: str
     character: CharacterRef
+
+class AvatarRequest(BaseModel):
+    """Generate a storybook portrait for a named character."""
+    name: str
+    relation: str = ""
+    description: str = ""    # optional appearance hints
+
+class AvatarResponse(BaseModel):
+    image_b64: str            # data:image/png;base64,... URI
 
 # --- Pipeline State Models ---
 
