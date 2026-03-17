@@ -14,6 +14,15 @@ openai
 Pillow
 PyYAML
 
+# RAG (document upload + story memory)
+faiss-cpu
+numpy
+PyMuPDF
+python-multipart
+
+# PDF export
+reportlab
+
 # Testing
 pytest
 pytest-asyncio

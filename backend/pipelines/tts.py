@@ -164,6 +164,11 @@ async def generate_audio(
 
         except Exception as e:
             _log_api_error(e, attempt, audio_model)
+            # 402 = insufficient balance — non-transient, don't retry
+            err_str = str(e)
+            if "402" in err_str or "insufficient" in err_str.lower():
+                print(f"[tts] 402 insufficient balance — aborting retries.")
+                return b""
             if attempt < _MAX_RETRIES:
                 await asyncio.sleep(_RETRY_BASE_DELAY * attempt)
             else:

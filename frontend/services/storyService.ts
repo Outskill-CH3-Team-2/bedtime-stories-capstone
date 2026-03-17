@@ -1,7 +1,8 @@
 import { Scene, PrefiredJob, StoryConfig } from '../types';
 import { storyCache, deleteDb } from './storyCache';
 
-const API_BASE = 'http://localhost:8000';
+// In production (same origin), use relative URLs. In dev, target localhost:8000.
+const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
 // ── Dev overrides (from .env) ─────────────────────────────────────────────────
 // VITE_DELETE_DB=true  → wipe IDB on startup (simulates first-run)
@@ -303,6 +304,58 @@ export const storyService = {
         return storyCache.loadConfig();
     },
     // ── Housekeeping ───────────────────────────────────────────────────────────
+
+  /** Export a completed story as a downloadable PDF booklet. */
+  async exportStoryPdf(childName: string, storyIdea: string, scenes: any[]): Promise<void> {
+    const response = await fetch(`${API_BASE}/story/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ child_name: childName, story_idea: storyIdea, scenes }),
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Export failed: ${response.status} ${text}`);
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `story_${childName.toLowerCase().replace(/\s+/g, '_')}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  /** Save story summary to RAG for cross-session memory. */
+  async saveStoryMemory(childName: string, sessionId: string, summary: string): Promise<void> {
+    await fetch(`${API_BASE}/story/memory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ child_name: childName, session_id: sessionId, summary }),
+    });
+  },
+
+  /** Upload a PDF to the RAG store. */
+  async uploadDocument(file: File, sourceType: string = 'upload'): Promise<any> {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('source_type', sourceType);
+    const response = await fetch(`${API_BASE}/story/upload?source_type=${sourceType}`, {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Upload failed: ${response.status} ${text}`);
+    }
+    return response.json();
+  },
+
+  /** Get the RAG library (uploaded documents). */
+  async getLibrary(): Promise<any> {
+    const response = await fetch(`${API_BASE}/story/library`);
+    if (!response.ok) throw new Error('Failed to fetch library');
+    return response.json();
+  },
 
   async debugStt(jobId: string, audiob64: string, storyText: string): Promise<void> {
     try {

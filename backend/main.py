@@ -2,7 +2,7 @@ import io
 import os
 import base64
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel as _BaseModel
 from backend.contracts import (
@@ -15,6 +15,9 @@ from backend.contracts import (
 from backend.orchestrator.pipeline import process_scene
 from backend.session_store import session_store, job_store
 from backend.safety.filters import sanitize_input
+from backend.rag import get_store
+from backend.rag.ingest import extract_text_from_pdf
+from backend.export_pdf import generate_story_pdf
 from utils.download_assets import download_if_missing
 
 # ---------------------------------------------------------------------------
@@ -263,9 +266,21 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
 
         safe_config = sanitize_input(request.config)
 
+        # RAG: search for relevant context from uploaded stories/documents
+        rag_context = None
+        try:
+            store = get_store()
+            if store.index.ntotal > 0:
+                rag_context = await store.search(request.story_idea, k=3)
+                if rag_context:
+                    print(f"[API] RAG context found ({len(rag_context)} chars) for idea: {request.story_idea[:60]}")
+        except Exception as e:
+            print(f"[API] RAG search failed (non-blocking): {e}")
+
         state = StoryState(
             config=safe_config,
             story_idea=request.story_idea,
+            rag_context=rag_context or None,
             messages=[{"role": "user", "content": f"The story idea is: {request.story_idea}"}],
         )
 
@@ -490,3 +505,146 @@ async def debug_stt(req: SttRequest):
         "word_overlap_pct": round(overlap * 100, 1),
         "match": overlap > 0.4,
     }
+
+
+# ---------------------------------------------------------------------------
+# RAG: Document upload, library management, story memory
+# ---------------------------------------------------------------------------
+
+@app.post("/story/upload")
+async def upload_document(file: UploadFile = File(...), source_type: str = "upload"):
+    """
+    Upload a PDF document for RAG context.
+    Extracts text, chunks it, embeds via OpenRouter, stores in FAISS.
+
+    source_type: "upload" (admin storybook) or "exported_story" (re-uploaded story PDF).
+    """
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+
+    pdf_bytes = await file.read()
+    if len(pdf_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 10MB).")
+
+    text = extract_text_from_pdf(pdf_bytes)
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="No text found in PDF.")
+
+    store = get_store()
+    chunk_count = await store.add_document(text, file.filename, source_type)
+
+    return {
+        "status": "ok",
+        "filename": file.filename,
+        "source_type": source_type,
+        "chunks_added": chunk_count,
+        "total_vectors": store.index.ntotal,
+    }
+
+
+@app.get("/story/library")
+async def list_library():
+    """List all uploaded documents in the RAG store."""
+    store = get_store()
+    return {
+        "files": store.list_files(),
+        "total_vectors": store.index.ntotal,
+    }
+
+
+@app.delete("/story/library/{filename}")
+async def delete_document(filename: str):
+    """Remove a document and its chunks from the RAG store."""
+    store = get_store()
+    deleted = await store.delete_file(filename)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="File not found in library.")
+    return {"status": "ok", "filename": filename, "total_vectors": store.index.ntotal}
+
+
+@app.post("/story/memory")
+async def save_story_memory(request: dict):
+    """
+    Save a completed story summary to RAG for cross-session memory.
+    Called by the frontend when a story ends — allows the child's story universe
+    to grow across sessions (reuse characters, reference past events).
+    """
+    summary = request.get("summary", "")
+    child_name = request.get("child_name", "unknown")
+    session_id = request.get("session_id", "")
+
+    if not summary.strip():
+        raise HTTPException(status_code=400, detail="Summary is required.")
+
+    filename = f"story_memory_{child_name}_{session_id[:8]}.txt"
+    store = get_store()
+    chunk_count = await store.add_document(summary, filename, source_type="story_memory")
+
+    return {"status": "ok", "filename": filename, "chunks_added": chunk_count}
+
+
+# ---------------------------------------------------------------------------
+# PDF Export
+# ---------------------------------------------------------------------------
+
+@app.post("/story/export")
+async def export_story_pdf(request: dict):
+    """
+    Generate a PDF booklet from a completed story.
+
+    Request body:
+    {
+      "child_name": "Leo",
+      "story_idea": "a brave knight",
+      "scenes": [
+        {
+          "story_text": "...",
+          "illustration_b64": "...",
+          "step_number": 0,
+          "is_ending": false,
+          "choice_made": "Follow the path"
+        },
+        ...
+      ]
+    }
+
+    Returns the PDF as base64 for frontend download.
+    """
+    from fastapi.responses import Response
+
+    child_name = request.get("child_name", "Child")
+    story_idea = request.get("story_idea", "a bedtime adventure")
+    scenes = request.get("scenes", [])
+
+    if not scenes:
+        raise HTTPException(status_code=400, detail="No scenes provided.")
+
+    pdf_bytes = generate_story_pdf(child_name, story_idea, scenes)
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="story_{child_name.lower().replace(" ", "_")}.pdf"'
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# SPA Static File Serving (production Docker deployment only)
+# Must be LAST — catches all unmatched GET routes and serves frontend.
+# ---------------------------------------------------------------------------
+
+_STATIC_DIR = os.getenv("STATIC_DIR", "")
+if _STATIC_DIR and os.path.isdir(_STATIC_DIR):
+    from fastapi.responses import FileResponse
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def _serve_spa(full_path: str):
+        file_path = os.path.join(_STATIC_DIR, full_path)
+        if full_path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        index = os.path.join(_STATIC_DIR, "index.html")
+        if os.path.isfile(index):
+            return FileResponse(index)
+        raise HTTPException(status_code=404)

@@ -80,18 +80,25 @@ def _build_image_prompt(narrative: str, characters: List[CharacterRef]) -> str:
 
     char_lines = []
     for c in characters:
+        desc = c.description.strip() if c.description else ""
+        is_animal = desc.lower() in ("cat", "dog", "pet", "rabbit", "hamster", "fish", "bird", "turtle", "horse", "pony")
         if c.role == "protagonist":
             line = (
                 f"- The MAIN CHILD CHARACTER must look exactly like the child "
                 f"in the first reference photo (same face, hair, features"
-                + (f": {c.description}" if c.description else "")
+                + (f": {desc}" if desc else "")
                 + ")."
+            )
+        elif is_animal:
+            line = (
+                f"- '{c.name}' is an ANIMAL (a {desc}). Draw as a {desc}, NOT as a human. "
+                f"Match the reference photo if provided. Only include if mentioned in the scene."
             )
         else:
             line = (
-                f"- The character named '{c.name}' must match their reference photo"
-                + (f" ({c.description})" if c.description else "")
-                + ". Only include this character if they appear in the scene."
+                f"- '{c.name}' ({desc}) must match their reference photo. "
+                f"Keep their gender and appearance consistent. "
+                f"Only include this character if they appear in the scene."
             )
         char_lines.append(line)
 

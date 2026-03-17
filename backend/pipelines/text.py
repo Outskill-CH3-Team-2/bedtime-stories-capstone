@@ -49,12 +49,26 @@ def _build_details(p) -> str:
         lines.append(f"  - {label}: {_q(activity)}")
 
     if p.pet_name and p.pet_type:
-        lines.append(f"  - pet: a {_q(p.pet_type)} named {_q(p.pet_name)}")
+        lines.append(f"  - companion ({_q(p.pet_type)}): named {_q(p.pet_name)} — this is an ANIMAL, always depict as a {_q(p.pet_type)}")
     elif p.pet_name:
-        lines.append(f"  - pet name: {_q(p.pet_name)}")
+        lines.append(f"  - pet: {_q(p.pet_name)}")
 
-    if p.friend_name:
-        lines.append(f"  - best friend: {_q(p.friend_name)}")
+    # Include ALL companions with their actual roles (pets, friends, uncles, etc.)
+    # This replaces the old hardcoded "best friend" label
+    companions_added = set()
+    for m in (p.companions or []):
+        if m.name and m.name.strip():
+            role = m.relation or "companion"
+            is_animal = role.lower() in ("pet", "cat", "dog", "rabbit", "hamster", "fish", "bird", "turtle", "horse", "pony")
+            if is_animal:
+                lines.append(f"  - companion ({_q(role)}): named {_q(m.name)} — this is an ANIMAL, always depict as a {_q(role)}")
+            else:
+                lines.append(f"  - companion ({_q(role)}): {_q(m.name)}")
+            companions_added.add(m.name.strip().lower())
+
+    # Fallback: if no companions but legacy friend_name exists
+    if p.friend_name and p.friend_name.strip().lower() not in companions_added:
+        lines.append(f"  - companion: {_q(p.friend_name)}")
 
     if p.place_to_visit:
         lines.append(f"  - dream destination: {_q(p.place_to_visit)}")

@@ -13,6 +13,7 @@ interface BookProps {
   choicesReady?: boolean;
   appTitle?: string;
   audioRef?: React.MutableRefObject<HTMLAudioElement | null>;
+  onExportPdf?: () => void;
 }
 
 const Book: React.FC<BookProps> = ({
@@ -22,6 +23,7 @@ const Book: React.FC<BookProps> = ({
   choicesReady = false,
   appTitle = 'Dream Weaver',
   audioRef: audioRefProp,
+  onExportPdf,
 }) => {
   const containerRef   = useRef<HTMLDivElement>(null);
   const flipRef        = useRef<PageFlip | null>(null);
@@ -343,11 +345,30 @@ const Book: React.FC<BookProps> = ({
 
         <div style={{ flexShrink: 0, paddingTop: 'calc(4% + 50px)' }}>
           {scene.is_ending ? (
-            <div style={{ textAlign: 'center', padding: '8% 0' }}>
+            <div style={{ textAlign: 'center', padding: '6% 0' }}>
               <div style={{ width: 30, height: 1, background: 'rgba(139,69,19,0.3)', margin: '0 auto 8px' }} />
-              <p style={{ fontFamily: "'Cinzel',serif", fontSize: 'clamp(10px,1.1vw,14px)', color: '#3d1f0d', margin: 0 }}>
+              <p style={{ fontFamily: "'Cinzel',serif", fontSize: 'clamp(10px,1.1vw,14px)', color: '#3d1f0d', margin: '0 0 12px 0' }}>
                 The End
               </p>
+              {onExportPdf && (
+                <button
+                  onClick={onExportPdf}
+                  style={{
+                    padding: '6px 16px',
+                    background: 'rgba(139,69,19,0.12)',
+                    border: '1px solid rgba(139,69,19,0.3)',
+                    borderRadius: 3,
+                    fontFamily: "'Cinzel',serif",
+                    fontSize: 'clamp(8px,0.8vw,11px)',
+                    color: '#6b3a1f',
+                    cursor: 'pointer',
+                    letterSpacing: '0.15em',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  Save as PDF
+                </button>
+              )}
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3%' }}>
