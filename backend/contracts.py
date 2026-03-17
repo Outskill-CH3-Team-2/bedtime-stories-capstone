@@ -23,6 +23,7 @@ class Personalization(BaseModel):
     pet_type: str = ""
     place_to_visit: str = ""
     friend_name: str = ""
+    companions: List[FamilyMemberInfo] = []  # pets, friends, etc. with actual roles
     siblings: List[FamilyMemberInfo] = []
     parents: List[FamilyMemberInfo] = []
     grandparents: List[FamilyMemberInfo] = []

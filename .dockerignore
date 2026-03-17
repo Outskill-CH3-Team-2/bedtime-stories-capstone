@@ -1,0 +1,13 @@
+bedtime/
+.env
+.git
+__pycache__
+*.pyc
+demo_output/
+rag_data/
+node_modules/
+frontend/node_modules/
+FAISSRAGFastAPI/
+TODO.md
+*.md
+tests/BedtimeStoryIntro.mp4

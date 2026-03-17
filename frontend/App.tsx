@@ -62,6 +62,7 @@ function migrateConfig(raw: any): StoryConfig {
  */
 async function registerSideCharacters(sessionId: string, config: StoryConfig): Promise<void> {
   const members: FamilyMember[] = [
+    ...config.companions,
     ...config.siblings,
     ...config.parents,
     ...config.grandparents,
@@ -78,7 +79,7 @@ async function registerSideCharacters(sessionId: string, config: StoryConfig): P
         name:        member.name,
         role:        'side',
         image_b64:   imageB64,
-        description: member.relation,
+        description: member.relation || 'family member',
       });
       console.log(`[App] Registered side character: ${member.name}`);
     } catch (err) {
@@ -214,6 +215,8 @@ const App: React.FC = () => {
   const [animPaused, setAnimPaused] = useState(false);
   // true only when every prefired job for the current scene is downloaded & cached
   const [choicesReady, setChoicesReady] = useState(false);
+  // true when narration audio finishes playing — choices locked until then
+  const [audioFinished, setAudioFinished] = useState(false);
 
   const [state, setState] = useState<StoryState>({
     sessionId: null,
@@ -221,6 +224,26 @@ const App: React.FC = () => {
     status: 'idle',
     error: null,
   });
+
+  // Track all scenes for PDF export + story memory
+  const scenesHistoryRef = useRef<Array<{ scene: Scene; choiceMade: string }>>([]);
+
+  // Reset audioFinished whenever displayScene changes (new scene = new narration)
+  useEffect(() => {
+    if (displayScene) {
+      // If no audio, consider it "finished" immediately
+      setAudioFinished(!displayScene.narration_audio_b64);
+    }
+  }, [displayScene]);
+
+  // Listen for audio 'ended' event to unlock choices
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const onEnded = () => setAudioFinished(true);
+    audio.addEventListener('ended', onEnded);
+    return () => audio.removeEventListener('ended', onEnded);
+  }, []);
 
   const prefiredJobsRef = useRef<Map<string, PrefiredJob>>(new Map());
   const activeJobIdRef = useRef<string | null>(null);
@@ -354,12 +377,46 @@ const App: React.FC = () => {
 
   useEffect(() => () => stopPolling(), []);
 
+  // Save story summary to RAG when a story ends (for cross-session memory)
+  const _saveStoryMemory = useCallback((sessionId: string, endingScene: Scene) => {
+    const allText = scenesHistoryRef.current
+      .map(({ scene, choiceMade }) => {
+        let text = scene.story_text;
+        if (choiceMade) text += `\n[Choice: ${choiceMade}]`;
+        return text;
+      })
+      .join('\n\n');
+    const childName = config.childName || 'Child';
+    storyService.saveStoryMemory(childName, sessionId, allText).catch(err =>
+      console.warn('[App] Failed to save story memory:', err)
+    );
+    console.log(`[App] Story memory saved for ${childName} (${allText.length} chars)`);
+  }, [config.childName]);
+
+  // Export all scenes as a PDF booklet
+  const handleExportPdf = useCallback(() => {
+    const scenes = scenesHistoryRef.current.map(({ scene, choiceMade }) => ({
+      story_text: scene.story_text,
+      illustration_b64: scene.illustration_b64,
+      step_number: scene.step_number,
+      is_ending: scene.is_ending,
+      choice_made: choiceMade,
+    }));
+    const childName = config.childName || 'Child';
+    storyService.exportStoryPdf(childName, idea, scenes).catch(err =>
+      console.error('[App] PDF export failed:', err)
+    );
+  }, [config.childName, idea]);
+
   const handleStart = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!idea.trim()) return;
+    // Debounce: prevent double-fire if already generating
+    if (state.status !== 'idle') return;
     try {
       // Clear any previous session from IDB before starting fresh
       storyService.clearCache().catch(() => { });
+      scenesHistoryRef.current = [];
 
       setState(prev => ({ ...prev, status: 'starting' }));
 
@@ -401,8 +458,14 @@ const App: React.FC = () => {
     setPendingScene(null);
     setState(prev => ({ ...prev, status: 'ready' }));
 
+    // Record first scene in history
+    scenesHistoryRef.current.push({ scene: pendingScene, choiceMade: '' });
+
     if (!pendingScene.is_ending) {
       prefireNextChapterJobs(state.sessionId, pendingScene.choices);
+    } else {
+      // Story ended on first scene (unlikely but handle it)
+      _saveStoryMemory(state.sessionId, pendingScene);
     }
   }, [pendingScene, state.sessionId, prefireNextChapterJobs]);
 
@@ -421,6 +484,10 @@ const App: React.FC = () => {
 
     selectedJobRef.current = { jobId: prefiredJob.jobId, choiceText: choice.text };
 
+    // Record the choice made for the previous scene
+    const lastEntry = scenesHistoryRef.current[scenesHistoryRef.current.length - 1];
+    if (lastEntry) lastEntry.choiceMade = choice.text;
+
     // Instant Swap Logic
     const cachedResult = await storyService.getCompletedResult(prefiredJob.jobId);
     if (cachedResult) {
@@ -434,12 +501,17 @@ const App: React.FC = () => {
         audio.play().catch(e => console.warn("Instant play blocked:", e));
       }
 
+      // Record this scene
+      scenesHistoryRef.current.push({ scene: cachedResult, choiceMade: '' });
+
       setDisplayScene(cachedResult);
       setPendingScene(null);
       setState(prev => ({ ...prev, status: 'ready', currentScene: cachedResult }));
 
       if (!cachedResult.is_ending && cachedResult.choices.length > 0) {
         prefireNextChapterJobs(sessionId, cachedResult.choices);
+      } else if (cachedResult.is_ending) {
+        _saveStoryMemory(sessionId, cachedResult);
       }
       return;
     }
@@ -593,9 +665,22 @@ const App: React.FC = () => {
             scene={displayScene!}
             onChoice={handleChoice}
             isGenerating={isGenerating}
-            choicesReady={choicesReady}
+            choicesReady={choicesReady && audioFinished}
             appTitle={APP_TITLE}
+            onExportPdf={handleExportPdf}
           />
+        </div>
+      )}
+
+      {/* Landscape hint for mobile portrait during book view */}
+      {showBook && (
+        <div className={`landscape-hint ${showBook ? 'active' : ''}`}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <rect x="4" y="2" width="16" height="20" rx="2" />
+            <path d="M12 18h.01" />
+          </svg>
+          <p style={{ fontSize: 14, letterSpacing: '0.15em' }}>Rotate your device for the best experience</p>
+          <p style={{ fontSize: 11, opacity: 0.5 }}>or tap anywhere to dismiss</p>
         </div>
       )}
 
