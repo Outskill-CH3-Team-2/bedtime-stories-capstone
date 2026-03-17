@@ -668,6 +668,14 @@ const App: React.FC = () => {
             choicesReady={choicesReady && audioFinished}
             appTitle={APP_TITLE}
             onExportPdf={handleExportPdf}
+            onNewStory={() => {
+              stopPolling();
+              prefiredJobsRef.current.clear();
+              selectedJobRef.current = null;
+              setState(p => ({ ...p, status: 'idle', error: null, sessionId: null }));
+              setDisplayScene(null);
+              setPendingScene(null);
+            }}
           />
         </div>
       )}

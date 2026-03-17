@@ -29,9 +29,10 @@ App funzionante end-to-end. Branch `feature/final-polish` contiene tutti i fix e
 - [x] Deployment: Dockerfile, render.yaml, SPA serving
 - [x] Presentation draft (5 slides, evaluation format)
 - [x] 34/34 test passing
+- [x] Bug fix: "New Story" button missing on ending screen (story stuck after completion)
+- [x] Race condition analysis: confirmed safe under single-process deployment (snapshot + commit guard)
 
 **Da fare:**
-- [ ] Team feedback su branch `feature/final-polish`
 - [ ] PR + merge to main
 - [ ] Deploy online (Render/Railway)
 - [ ] Finalizzare presentazione (foto team, Google Slides)
