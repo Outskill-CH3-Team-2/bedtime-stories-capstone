@@ -344,6 +344,7 @@ async def generate_image(
                 model=model_name,
                 messages=[{"role": "user", "content": content}],
                 modalities=["image"],
+                max_tokens=4096,
             )
 
             # Log what the model actually returned for traceability

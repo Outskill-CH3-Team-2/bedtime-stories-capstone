@@ -245,11 +245,16 @@ const App: React.FC = () => {
     return () => audio.removeEventListener('ended', onEnded);
   }, []);
 
+  // true once prefireNextChapterJobs has returned (jobs fired, IDs known)
+  const [jobsFired, setJobsFired] = useState(false);
+
   const prefiredJobsRef = useRef<Map<string, PrefiredJob>>(new Map());
   const activeJobIdRef = useRef<string | null>(null);
   const selectedJobRef = useRef<{ jobId: string; choiceText: string } | null>(null);
   const pollingRef = useRef<{ active: boolean; intervalId: ReturnType<typeof setInterval> | null; }>({ active: false, intervalId: null });
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Ref-based debounce for handleStart (React state can be stale across rapid clicks)
+  const startingRef = useRef(false);
 
   const stopPolling = () => {
     pollingRef.current.active = false;
@@ -304,7 +309,8 @@ const App: React.FC = () => {
     if (!choices.length) return;
 
     prefiredJobsRef.current.clear();
-    setChoicesReady(false); // lock buttons until all prefired jobs are downloaded
+    setChoicesReady(false);
+    setJobsFired(false); // lock buttons until jobs are fired
     const prevSelected = selectedJobRef.current;
     selectedJobRef.current = null;
 
@@ -327,6 +333,7 @@ const App: React.FC = () => {
     });
 
     await Promise.all(promises);
+    setJobsFired(true); // buttons can now be clicked (fallback polling handles uncached results)
 
     // Persist prefired jobs so IDB can serve them across refresh
     const allJobs = Array.from(prefiredJobsRef.current.values()) as PrefiredJob[];
@@ -411,8 +418,9 @@ const App: React.FC = () => {
   const handleStart = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!idea.trim()) return;
-    // Debounce: prevent double-fire if already generating
-    if (state.status !== 'idle') return;
+    // Debounce: ref-based guard survives React batching; state check is backup
+    if (startingRef.current || state.status !== 'idle') return;
+    startingRef.current = true;
     try {
       // Clear any previous session from IDB before starting fresh
       storyService.clearCache().catch(() => { });
@@ -435,6 +443,7 @@ const App: React.FC = () => {
         console.warn('[App] Side character registration error:', err)
       );
     } catch (err: any) {
+      startingRef.current = false;
       setState(prev => ({ ...prev, status: 'error', error: err.message }));
     }
   };
@@ -460,6 +469,14 @@ const App: React.FC = () => {
 
     // Record first scene in history
     scenesHistoryRef.current.push({ scene: pendingScene, choiceMade: '' });
+
+    // Commit scene 0's response to the live session: set its job as
+    // "selected" so prefireNextChapterJobs passes prev_job_id to the
+    // backend.  Without this, the prefire snapshots would be missing
+    // scene 0's text and the LLM would restart the story from scratch.
+    if (activeJobIdRef.current) {
+      selectedJobRef.current = { jobId: activeJobIdRef.current, choiceText: '' };
+    }
 
     if (!pendingScene.is_ending) {
       prefireNextChapterJobs(state.sessionId, pendingScene.choices);
@@ -665,13 +682,14 @@ const App: React.FC = () => {
             scene={displayScene!}
             onChoice={handleChoice}
             isGenerating={isGenerating}
-            choicesReady={choicesReady && audioFinished}
+            choicesReady={(jobsFired || choicesReady) && audioFinished}
             appTitle={APP_TITLE}
             onExportPdf={handleExportPdf}
             onNewStory={() => {
               stopPolling();
               prefiredJobsRef.current.clear();
               selectedJobRef.current = null;
+              startingRef.current = false;
               setState(p => ({ ...p, status: 'idle', error: null, sessionId: null }));
               setDisplayScene(null);
               setPendingScene(null);
@@ -702,6 +720,7 @@ const App: React.FC = () => {
               stopPolling();
               prefiredJobsRef.current.clear();
               selectedJobRef.current = null;
+              startingRef.current = false;
               setState(p => ({ ...p, status: 'idle', error: null, sessionId: null }));
               setDisplayScene(null);
               setPendingScene(null);
