@@ -4,6 +4,21 @@ import { storyCache, deleteDb } from './storyCache';
 // In production (same origin), use relative URLs. In dev, target localhost:8000.
 const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
 
+// User-provided API key (set from config, kept in memory only)
+let _userApiKey: string | null = null;
+
+/** Set the user's OpenRouter API key for all subsequent requests. */
+export function setUserApiKey(key: string | null): void {
+  _userApiKey = key?.trim() || null;
+}
+
+/** Build headers, injecting the user API key if set. */
+function _headers(extra?: Record<string, string>): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
+  if (_userApiKey) h['X-OpenRouter-Key'] = _userApiKey;
+  return h;
+}
+
 // ── Dev overrides (from .env) ─────────────────────────────────────────────────
 // VITE_DELETE_DB=true  → wipe IDB on startup (simulates first-run)
 // VITE_TEST_IMAGE=xxx  → path under /public/ used for every illustration
@@ -90,7 +105,7 @@ export const storyService = {
 
     const response = await fetch(`${API_BASE}/story/generate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _headers(),
       body: JSON.stringify(body),
     });
     if (!response.ok) {
@@ -119,7 +134,7 @@ export const storyService = {
 
     const response = await fetch(`${API_BASE}/story/generate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _headers(),
       body: JSON.stringify(body),
     });
     if (!response.ok) {
@@ -138,7 +153,7 @@ export const storyService = {
   }): Promise<void> {
     const response = await fetch(`${API_BASE}/story/character`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _headers(),
       body: JSON.stringify({
         session_id: sessionId,
         character: {
@@ -162,7 +177,7 @@ export const storyService = {
   async generateAvatar(name: string, relation: string, description?: string): Promise<string> {
     const response = await fetch(`${API_BASE}/story/avatar`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _headers(),
       body: JSON.stringify({ name, relation, description: description || '' }),
     });
     if (!response.ok) {
@@ -309,7 +324,7 @@ export const storyService = {
   async exportStoryPdf(childName: string, storyIdea: string, scenes: any[]): Promise<void> {
     const response = await fetch(`${API_BASE}/story/export`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _headers(),
       body: JSON.stringify({ child_name: childName, story_idea: storyIdea, scenes }),
     });
     if (!response.ok) {
@@ -329,7 +344,7 @@ export const storyService = {
   async saveStoryMemory(childName: string, sessionId: string, summary: string): Promise<void> {
     await fetch(`${API_BASE}/story/memory`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: _headers(),
       body: JSON.stringify({ child_name: childName, session_id: sessionId, summary }),
     });
   },
@@ -361,7 +376,7 @@ export const storyService = {
     try {
       const resp = await fetch(`${API_BASE}/story/debug/stt`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: _headers(),
         body: JSON.stringify({ job_id: jobId, audio_b64: audiob64, story_text: storyText }),
       });
       if (!resp.ok) {

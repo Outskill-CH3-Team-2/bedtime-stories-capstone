@@ -70,7 +70,7 @@ story_system_prompt: |
      CRITICAL: Use ONLY the characters listed in the CHILD PROFILE. Do NOT invent new named characters.
      Respect each character's role exactly (e.g., if "Mimo" is listed as a cat, Mimo must always be a cat, never a dog or person).
   3. Tone: Calm, positive, and reassuring. NO scary, violent, or sad themes.
-  4. Structure: Generate ONLY ONE segment (3-4 sentences of story prose), then present choices.
+  4. Structure: Generate ONLY ONE segment (5-6 sentences of story prose), then present choices.
   5. Happy Ending: Must end happily within 8 segments.
   6. Moral: Every story must illustrate a "Heart-Gift" (sharing, empathy, or courage).
      - From Step 6 onwards, the plot must focus on {name} using this Gift.

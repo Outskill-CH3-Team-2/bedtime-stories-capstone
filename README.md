@@ -27,9 +27,13 @@ node_generate_text
     └─ LLM (OpenRouter → gpt-4o) generates story prose + 2 choices
     └─ parse_response() splits narrative from [Choice A: ...] / [Choice B: ...]
 
+node_safety_check (v02)
+    └─ LLM (OpenRouter → gpt-4o-mini) evaluates text for age-appropriateness
+    └─ Triggers a retry if the content is flagged as unsafe
+
 node_generate_media  (runs text → TTS and text → image concurrently)
     ├─ TTS  (OpenRouter → gpt-4o-audio-preview, PCM16 @ 24kHz)
-    └─ Image (OpenRouter → gpt-4o, base64 PNG)
+    └─ Image (OpenRouter → google/gemini-3.1-flash-image-preview-20260226, base64 PNG)
 
 node_assemble
     └─ builds the scene payload: story_text, audio_b64, image_b64, choices[]
@@ -43,6 +47,11 @@ After displaying a scene the frontend immediately fires **one job per choice** s
 ### Session / job stores
 
 Both stores are in-memory (`session_store.py`). Sessions hold the growing conversation history (LLM messages) and character reference images. Jobs hold status + result.
+
+### v02 Advanced Features
+* **RAG & Cross-Session Memory**: Vectors are stored in a FAISS index (`rag_data/index.faiss`). Uploaded PDFs are chunked and embedded. A story summary is saved to the store at Step 8, giving the app long-term memory.
+* **Character Consistency & Avatars**: Base64 reference images are passed directly into the multimodal image generation prompt. If family members lack photos, `/story/avatar` generates a portrait.
+* **PDF Export**: Completed stories can be exported as A5 PDF booklets via `/story/export` (emojis are stripped automatically to prevent rendering crashes).
 
 ---
 
@@ -59,7 +68,7 @@ bedtime-stories-capstone/
 │   ├── pipelines/
 │   │   ├── text.py              # LLM text generation + parse_response()
 │   │   ├── tts.py               # Audio generation (gpt-4o-audio-preview)
-│   │   ├── image.py             # Image generation (gpt-4o)
+│   │   ├── image.py             # Image generation (gemini-3.1-flash-image)
 │   │   └── provider.py          # OpenRouter client factory
 │   ├── config/
 │   │   └── prompts.yaml         # System + story prompts

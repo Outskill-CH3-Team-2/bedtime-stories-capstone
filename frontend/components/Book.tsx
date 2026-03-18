@@ -14,6 +14,7 @@ interface BookProps {
   appTitle?: string;
   audioRef?: React.MutableRefObject<HTMLAudioElement | null>;
   onExportPdf?: () => void;
+  onNewStory?: () => void;
 }
 
 const Book: React.FC<BookProps> = ({
@@ -24,6 +25,7 @@ const Book: React.FC<BookProps> = ({
   appTitle = 'Dream Weaver',
   audioRef: audioRefProp,
   onExportPdf,
+  onNewStory,
 }) => {
   const containerRef   = useRef<HTMLDivElement>(null);
   const flipRef        = useRef<PageFlip | null>(null);
@@ -350,25 +352,46 @@ const Book: React.FC<BookProps> = ({
               <p style={{ fontFamily: "'Cinzel',serif", fontSize: 'clamp(10px,1.1vw,14px)', color: '#3d1f0d', margin: '0 0 12px 0' }}>
                 The End
               </p>
-              {onExportPdf && (
-                <button
-                  onClick={onExportPdf}
-                  style={{
-                    padding: '6px 16px',
-                    background: 'rgba(139,69,19,0.12)',
-                    border: '1px solid rgba(139,69,19,0.3)',
-                    borderRadius: 3,
-                    fontFamily: "'Cinzel',serif",
-                    fontSize: 'clamp(8px,0.8vw,11px)',
-                    color: '#6b3a1f',
-                    cursor: 'pointer',
-                    letterSpacing: '0.15em',
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  Save as PDF
-                </button>
-              )}
+              <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+                {onExportPdf && (
+                  <button
+                    onClick={onExportPdf}
+                    style={{
+                      padding: '6px 16px',
+                      background: 'rgba(139,69,19,0.12)',
+                      border: '1px solid rgba(139,69,19,0.3)',
+                      borderRadius: 3,
+                      fontFamily: "'Cinzel',serif",
+                      fontSize: 'clamp(8px,0.8vw,11px)',
+                      color: '#6b3a1f',
+                      cursor: 'pointer',
+                      letterSpacing: '0.15em',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    Save as PDF
+                  </button>
+                )}
+                {onNewStory && (
+                  <button
+                    onClick={onNewStory}
+                    style={{
+                      padding: '6px 16px',
+                      background: 'rgba(44,24,16,0.85)',
+                      border: '1px solid rgba(139,69,19,0.5)',
+                      borderRadius: 3,
+                      fontFamily: "'Cinzel',serif",
+                      fontSize: 'clamp(8px,0.8vw,11px)',
+                      color: '#f2e8cf',
+                      cursor: 'pointer',
+                      letterSpacing: '0.15em',
+                      textTransform: 'uppercase',
+                    }}
+                  >
+                    New Story
+                  </button>
+                )}
+              </div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3%' }}>

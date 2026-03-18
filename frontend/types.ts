@@ -50,6 +50,8 @@ export interface StoryConfig {
   grandparents: FamilyMember[];
   childPhoto: string;
   privacyAcknowledged: boolean;
+  // ── API Settings ─────────────────────────────────────────────────────────
+  openrouterApiKey?: string;
   // Legacy fields kept for migration / backward-compat
   petName?: string;
   petType?: string;
