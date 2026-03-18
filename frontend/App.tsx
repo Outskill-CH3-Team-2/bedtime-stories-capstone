@@ -420,6 +420,11 @@ const App: React.FC = () => {
   const handleStart = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!idea.trim()) return;
+    // Require an API key (user-provided or server-side)
+    if (!config.openrouterApiKey?.trim()) {
+      setState(prev => ({ ...prev, error: 'Please enter your OpenRouter API key in Settings before starting a story.' }));
+      return;
+    }
     // Debounce: ref-based guard survives React batching; state check is backup
     if (startingRef.current || state.status !== 'idle') return;
     startingRef.current = true;
