@@ -1,10 +1,10 @@
 # TODO - Dream Weaver
 
-> Last updated: 2026-03-17 — branch `feature/final-polish` (commit 6f806e5)
+> Last updated: 2026-03-18 — branch `feature/final-polish` (PR #40 open)
 
 ## Status Summary
 
-**App is functional end-to-end.** All core features working, 34/34 tests passing. Pending: team review, PR merge, deployment, presentation finalization.
+**App is functional end-to-end.** All core features working, 34/34 tests passing. E2E verified via API (2-scene story with text + audio + image + choices). PR #40 open, presentation deck filled from course template.
 
 | Feature | Status |
 |---------|--------|
@@ -18,15 +18,17 @@
 | Config data reaching LLM prompt (structured CHILD PROFILE) | Done |
 | TTS narration (expressive Director+Actor pipeline) | Done |
 | TTS 402 short-circuit (no retry on insufficient balance) | Done |
-| Story start debounce (no duplicate beginnings) | Done |
-| Choices locked until narration audio finishes | Done |
+| Image max_tokens capped at 4096 (prevents 402 credit errors) | Done |
+| Story start debounce (ref-based, survives React batching) | Done |
+| Scene 0 history committed before prefiring scene 1 | Done |
+| Choices unlock when jobs fired (not when results cached) | Done |
 | Moral message in every story (Heart-Gift framework) | Done |
 | RAG integration (FAISS + OpenRouter embeddings) | Done |
 | PDF booklet export (A5, cover + scene pages) | Done |
 | Story memory (auto-save for cross-session universe) | Done |
 | Mobile UI (responsive CSS + landscape hint) | Done |
 | Deployment config (Dockerfile + render.yaml) | Done |
-| Presentation draft (5 slides, evaluation format) | Done |
+| Presentation deck (course template filled, team photos) | Done |
 
 ## Previous Bugs — All Fixed
 
@@ -39,12 +41,12 @@
 - Fix: Short-circuit retry on 402 + OpenRouter topped up
 
 ### Bug #3: Duplicate story beginnings (MEDIUM) — FIXED
-- Root cause: No debounce on handleStart()
-- Fix: `state.status !== 'idle'` guard
+- Root cause: React state batching let two rapid clicks both pass idle check
+- Fix: `startingRef` (useRef) as synchronous debounce guard + state check backup
 
 ### Bug #4: Choices available during audio (from E2E test) — FIXED
 - Root cause: choicesReady only checked prefired job cache, not audio state
-- Fix: Added audioFinished state, choices require `choicesReady && audioFinished`
+- Fix: Added audioFinished state, choices require `(jobsFired || choicesReady) && audioFinished`
 
 ### Bug #5: Image misrepresentation (cat as dog, male as female) — IMPROVED
 - Root cause: Image prompt lacked character descriptions
@@ -54,13 +56,23 @@
 - Root cause: Two keys with same name, second overwrote first silently
 - Fix: Removed duplicate, merged moral lesson + character rules into single prompt
 
+### Bug #7: Image/TTS/text 402 credit errors — FIXED
+- Root cause: Image gen defaulted to 32768 max_tokens; safety used 5000 for tiny JSON
+- Fix: Image max_tokens=4096, safety max_tokens=500
+
+### Bug #8: LLM restarting story on scene 1 ("two beginnings") — FIXED
+- Root cause: Scene 0's response never committed to live session before prefiring scene 1
+- Fix: Set scene 0's job as selectedJobRef in handleContinue so prev_job_id is passed to backend
+
+### Bug #9: Dead time between audio end and choices appearing — FIXED
+- Root cause: Choices required all prefire results to be fully cached (too slow)
+- Fix: Added jobsFired state; buttons enable when jobs are dispatched, fallback polling handles uncached results
+
 ## Remaining Work
 
-- [ ] Team feedback on `feature/final-polish` branch
-- [ ] Create PR and merge to main
+- [ ] Merge PR #40 to main
 - [ ] Deploy online (Render/Railway)
-- [ ] Finalize presentation in Google Slides
-- [ ] Collect team photos for team slide
+- [ ] Finalize presentation in Google Slides (team fixing colors/alignment)
 - [ ] Record demo video
 - [ ] Submit deck to Outskill
 

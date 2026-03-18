@@ -8,35 +8,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## DEADLINE: 18 MARZO 2026 (corso Outskill AI Engineering)
 
-### Stato attuale (17 marzo 2026)
+### Stato attuale (18 marzo 2026)
 
-App funzionante end-to-end. Branch `feature/final-polish` contiene tutti i fix e le nuove feature.
+App funzionante end-to-end, testata manualmente e via API E2E. Branch `feature/final-polish` con PR #40 aperta verso main.
 
 **Completati:**
 - [x] PR #33: bug critici frontend (config screen, story_idea, button sync)
 - [x] PR #34: prompt aggiornato per moral message
 - [x] PR #38: side characters + config screen redesign + injection protection
 - [x] Bug fix: TTS 402 short-circuit (no retry on insufficient balance)
-- [x] Bug fix: debounce duplicate story starts
-- [x] Bug fix: companion roles rispettati (Cat, Uncle, ecc. — non piu hardcoded "best friend")
+- [x] Bug fix: debounce duplicate story starts (ref-based guard)
+- [x] Bug fix: companion roles rispettati (Cat, Uncle, ecc.)
 - [x] Bug fix: scelte bloccate fino a fine narrazione audio
 - [x] Bug fix: duplicate story_system_prompt in YAML rimosso
-- [x] Bug fix: image prompt migliorato per character consistency (animali, genere)
+- [x] Bug fix: image prompt migliorato per character consistency
+- [x] Bug fix: image max_tokens capped at 4096 (was defaulting to 32768 → 402 errors)
+- [x] Bug fix: safety max_tokens reduced 5000→500 (only returns small JSON)
+- [x] Bug fix: scene 0 history committed before prefiring scene 1 (fixes LLM restarting story)
+- [x] Bug fix: choices unlock when jobs fired, not when results cached (eliminates dead time)
 - [x] RAG integration: FAISS + OpenRouter embeddings per story memory
 - [x] PDF export: booklet A5 con illustrazioni e testo
 - [x] Story memory: auto-save per espandere universo del bambino
 - [x] Mobile UI: landscape hint, responsive adjustments
 - [x] Deployment: Dockerfile, render.yaml, SPA serving
-- [x] Presentation draft (5 slides, evaluation format)
+- [x] Presentation: course template filled, team photos (Tamas + Alessandro)
 - [x] 34/34 test passing
-- [x] Bug fix: "New Story" button missing on ending screen (story stuck after completion)
-- [x] Race condition analysis: confirmed safe under single-process deployment (snapshot + commit guard)
+- [x] E2E API test: 2-scene story verified (text + audio + image + choices)
+- [x] PR #40 opened (feature/final-polish → main)
 
 **Da fare:**
-- [ ] PR + merge to main
+- [ ] Merge PR #40 to main
 - [ ] Deploy online (Render/Railway)
-- [ ] Finalizzare presentazione (foto team, Google Slides)
-- [ ] Registrare demo video
+- [ ] Finalize presentation in Google Slides (team fixing colors/alignment)
+- [ ] Record demo video
 
 ## Commands
 
@@ -101,7 +105,7 @@ At story start, the RAG store is queried with `story_idea`. If relevant content 
 |-----------|-------|
 | Text generation | `gpt-4o` |
 | Safety classifier | `openai/gpt-4o-mini` |
-| Image generation | `google/gemini-2.5-flash-image` |
+| Image generation | `google/gemini-3.1-flash-image-preview` |
 | TTS narration | `openai/gpt-4o-audio-preview` |
 | Embeddings (RAG) | `openai/text-embedding-3-small` |
 
@@ -165,4 +169,4 @@ docker run -e OPENROUTER_API_KEY=sk-... -p 8000:8000 dream-weaver
 Or deploy via Render using `render.yaml` (set `OPENROUTER_API_KEY` env var in dashboard).
 
 # currentDate
-Today's date is 2026-03-17.
+Today's date is 2026-03-18.
