@@ -168,6 +168,13 @@ async def _mock_pipeline_task(job_id: str, session_id: str) -> None:
 
 @app.get("/")
 async def root():
+    # In production (STATIC_DIR set), serve the frontend; otherwise return API status
+    static_dir = os.getenv("STATIC_DIR", "")
+    if static_dir:
+        index = os.path.join(static_dir, "index.html")
+        if os.path.isfile(index):
+            from fastapi.responses import FileResponse
+            return FileResponse(index)
     return {"status": "ok", "service": "Story Weaver API", "version": "1.0", "mock_mode": MOCK_PIPELINES}
 
 
