@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { StoryState, Scene, Choice, PrefiredJob, StoryConfig, DEFAULT_CONFIG, FamilyMember } from './types';
-import { storyService } from './services/storyService';
+import { storyService, setUserApiKey } from './services/storyService';
 
 // Migrates saved configs from older formats to the current shape
 function migrateConfig(raw: any): StoryConfig {
@@ -290,7 +290,9 @@ const App: React.FC = () => {
     storyService.loadConfig().then((loaded) => {
       if (loaded && loaded.childName) {
         console.log('[App] Loaded saved configuration from IDB');
-        setConfig(migrateConfig(loaded));
+        const migrated = migrateConfig(loaded);
+        setConfig(migrated);
+        setUserApiKey(migrated.openrouterApiKey || null);
       } else {
         console.log('[App] No saved config found — opening configuration screen');
         setShowConfig(true);
@@ -664,6 +666,7 @@ const App: React.FC = () => {
           config={config}
           onSave={(newConfig) => {
             setConfig(newConfig);
+            setUserApiKey(newConfig.openrouterApiKey || null);
             storyService.saveConfig(newConfig).catch(() => { });
             setShowConfig(false);
           }}

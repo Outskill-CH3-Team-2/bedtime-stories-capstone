@@ -156,3 +156,5 @@ class StoryState(BaseModel):
     # Per-session character registry — stored in server memory only, never sent to client.
     # Key = character name (lowercase), value = CharacterRef with reference image.
     characters: Dict[str, CharacterRef] = {}
+    # User-provided OpenRouter API key (stored in session memory only, never persisted)
+    api_key_override: Optional[str] = None

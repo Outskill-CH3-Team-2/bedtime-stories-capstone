@@ -2,7 +2,7 @@ import io
 import os
 import base64
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel as _BaseModel
 from backend.contracts import (
@@ -13,6 +13,7 @@ from backend.contracts import (
     ChildConfig, SceneOutput, Choice,
 )
 from backend.orchestrator.pipeline import process_scene
+from backend.pipelines.provider import set_api_key_override
 from backend.session_store import session_store, job_store
 from backend.safety.filters import sanitize_input
 from backend.rag import get_store
@@ -82,7 +83,7 @@ app.add_middleware(
 # Background task
 # ---------------------------------------------------------------------------
 
-async def run_pipeline_task(job_id: str, session_id: str, choice_text: str = ""):
+async def run_pipeline_task(job_id: str, session_id: str, choice_text: str = "", api_key: str | None = None):
     """
     Run the pipeline for one job.
 
@@ -91,6 +92,10 @@ async def run_pipeline_task(job_id: str, session_id: str, choice_text: str = "")
     conversation history.  The choice_text for this branch is appended to the
     snapshot before running so the LLM sees the correct context.
     """
+    # Apply user-provided API key if present
+    if api_key:
+        set_api_key_override(api_key)
+
     job = job_store.get(job_id)
     state = session_store.get(session_id)
     if not job or not state:
@@ -242,7 +247,7 @@ async def legacy_get_status(id: str):
 
 
 @app.post("/story/generate", response_model=GenerateResponse)
-async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
+async def generate(request: GenerateRequest, background_tasks: BackgroundTasks, req: Request = None):
     """
     Unified generate endpoint for first chapter AND subsequent chapters.
 
@@ -277,11 +282,15 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
         except Exception as e:
             print(f"[API] RAG search failed (non-blocking): {e}")
 
+        # Extract user-provided API key from header (if any)
+        user_api_key = req.headers.get("x-openrouter-key") if req else None
+
         state = StoryState(
             config=safe_config,
             story_idea=request.story_idea,
             rag_context=rag_context or None,
             messages=[{"role": "user", "content": f"The story idea is: {request.story_idea}"}],
+            api_key_override=user_api_key or None,
         )
 
         # Register protagonist: frontend-uploaded photo > server dev fixture > nothing
@@ -335,7 +344,7 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks):
     # ── Create job and fire ────────────────────────────────────────────────
     job = job_store.create(state.session_id)
     branch_choice = request.choice_text or ""
-    background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, branch_choice)
+    background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, branch_choice, state.api_key_override)
 
     print(f"[API] Job {job.job_id} queued for session {state.session_id} step={state.step_number} choice='{branch_choice[:40]}'")
     return GenerateResponse(session_id=state.session_id, job_id=job.job_id)
@@ -359,7 +368,7 @@ async def add_character(request: AddCharacterRequest):
 
 
 @app.post("/story/avatar", response_model=AvatarResponse)
-async def generate_avatar(request: AvatarRequest):
+async def generate_avatar(request: AvatarRequest, req: Request = None):
     """
     Generate a storybook portrait for a named side character.
 
@@ -369,6 +378,11 @@ async def generate_avatar(request: AvatarRequest):
     """
     from backend.pipelines.image import generate_image
     import base64
+
+    # Apply user API key override if provided
+    user_api_key = req.headers.get("x-openrouter-key") if req else None
+    if user_api_key:
+        set_api_key_override(user_api_key)
 
     name     = request.name.strip()[:30] or "Character"
     relation = request.relation.strip()[:30]
