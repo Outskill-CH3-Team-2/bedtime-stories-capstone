@@ -682,7 +682,7 @@ const App: React.FC = () => {
             scene={displayScene!}
             onChoice={handleChoice}
             isGenerating={isGenerating}
-            choicesReady={(jobsFired || choicesReady) && audioFinished}
+            choicesReady={choicesReady}
             appTitle={APP_TITLE}
             onExportPdf={handleExportPdf}
             onNewStory={() => {
