@@ -39,7 +39,9 @@ class StoryChooseRequest(_BaseModel):
 
 # Resolve paths relative to project root (one level above this file's package)
 _PROJECT_ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_PUBLIC_DIR     = os.path.join(_PROJECT_ROOT, "frontend", "public")
+# In Docker (STATIC_DIR set), public assets live inside the static dir;
+# in local dev they live in frontend/public/.
+_PUBLIC_DIR     = os.getenv("STATIC_DIR") or os.path.join(_PROJECT_ROOT, "frontend", "public")
 _PUBLIC_PROPS   = os.path.join(_PUBLIC_DIR, "binaries.properties")
 _CHILD_PHOTO    = os.path.join(_PUBLIC_DIR, "child_photo_01.png")
 
