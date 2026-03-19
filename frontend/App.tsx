@@ -349,12 +349,18 @@ const App: React.FC = () => {
     activeJobIdRef.current = jobId;
     pollingRef.current.active = true;
 
+    let failCount = 0; // Track transient network failures
+
     pollingRef.current.intervalId = setInterval(async () => {
       if (!pollingRef.current.active) return;
       try {
         const status = await storyService.checkStatus(jobId);
+        failCount = 0; // Reset on successful ping
+        
         if (status === 'complete') {
           stopPolling();
+          startingRef.current = false; // Successfully unlock start debounce
+
           const result = await storyService.getResult(jobId);
 
           if (isFirstScene) {
@@ -376,10 +382,17 @@ const App: React.FC = () => {
           }
         } else if (status === 'failed') {
           stopPolling();
+          startingRef.current = false; // Unlock ref on backend failure
           setState(prev => ({ ...prev, status: 'error', error: 'The ink failed to bind to the page.' }));
         }
       } catch (err: any) {
-        console.error('[App] polling error:', err);
+        console.warn('[App] polling transient error:', err);
+        failCount++;
+        if (failCount >= 4) { // 8 seconds of total network failure
+          stopPolling();
+          startingRef.current = false; // Unlock ref on network timeout
+          setState(prev => ({ ...prev, status: 'error', error: 'Lost connection to the storybook server. Please try again.' }));
+        }
       }
     }, 2000);
   }, [prefireNextChapterJobs]);
@@ -427,7 +440,8 @@ const App: React.FC = () => {
     }
     // Debounce: ref-based guard survives React batching; state check is backup
     if (startingRef.current || state.status !== 'idle') return;
-    startingRef.current = true;
+    startingRef.current = true; // Lock
+    
     try {
       // Clear any previous session from IDB before starting fresh
       storyService.clearCache().catch(() => { });
@@ -450,7 +464,8 @@ const App: React.FC = () => {
         console.warn('[App] Side character registration error:', err)
       );
     } catch (err: any) {
-      startingRef.current = false;
+      // If it fails immediately, unlock and show error
+      startingRef.current = false; 
       setState(prev => ({ ...prev, status: 'error', error: err.message }));
     }
   };
@@ -458,7 +473,7 @@ const App: React.FC = () => {
   const handleContinue = useCallback(() => {
     if (!pendingScene || !state.sessionId) return;
 
-    // [FIX] Play First Page Audio synchronously
+    // Play First Page Audio synchronously
     const audio = audioRef.current;
     if (audio && pendingScene.narration_audio_b64) {
       audio.pause();

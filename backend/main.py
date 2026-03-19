@@ -1,8 +1,11 @@
 import io
 import os
 import base64
+import httpx
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, UploadFile, File
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel as _BaseModel
 from backend.contracts import (
@@ -72,7 +75,7 @@ app = FastAPI(title="Story Weaver API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"], # NOTE: Update to specific domain for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -86,11 +89,6 @@ app.add_middleware(
 async def run_pipeline_task(job_id: str, session_id: str, choice_text: str = "", api_key: str | None = None):
     """
     Run the pipeline for one job.
-
-    Each job works on a snapshot of the session state so that parallel
-    pre-generation jobs (one per choice branch) don't corrupt each other's
-    conversation history.  The choice_text for this branch is appended to the
-    snapshot before running so the LLM sees the correct context.
     """
     # Apply user-provided API key if present
     if api_key:
@@ -177,10 +175,27 @@ async def root():
             return FileResponse(index)
     return {"status": "ok", "service": "Story Weaver API", "version": "1.0", "mock_mode": MOCK_PIPELINES}
 
+@app.post("/story/validate-key")
+async def validate_key(req: Request):
+    """Lightweight check to ensure API key works before saving in frontend state."""
+    user_api_key = req.headers.get("x-openrouter-key")
+    if not user_api_key:
+        raise HTTPException(status_code=400, detail="No API Key provided")
+    
+    async with httpx.AsyncClient() as client:
+        res = await client.get(
+            "https://openrouter.ai/api/v1/auth/key", 
+            headers={"Authorization": f"Bearer {user_api_key}"}
+        )
+        if res.status_code == 200:
+            return {"valid": True}
+        else:
+            raise HTTPException(status_code=401, detail="Invalid API Key")
 
 @app.post("/story/start")
-async def story_start(config: ChildConfig, background_tasks: BackgroundTasks):
+async def story_start(config: ChildConfig, background_tasks: BackgroundTasks, req: Request):
     """Simple story-start endpoint: accepts ChildConfig, returns session_id + job_id."""
+    user_api_key = req.headers.get("x-openrouter-key")
     safe_config = sanitize_input(config)
     state = StoryState(config=safe_config)
     session_store.set(state.session_id, state)
@@ -191,14 +206,15 @@ async def story_start(config: ChildConfig, background_tasks: BackgroundTasks):
     if MOCK_PIPELINES:
         background_tasks.add_task(_mock_pipeline_task, job.job_id, state.session_id)
     else:
-        background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, "")
+        background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, "", user_api_key)
 
     return {"session_id": state.session_id, "job_id": job.job_id, "step_number": state.step_number}
 
 
 @app.post("/story/choose")
-async def story_choose(request: StoryChooseRequest, background_tasks: BackgroundTasks):
+async def story_choose(request: StoryChooseRequest, background_tasks: BackgroundTasks, req: Request):
     """Advance the story by committing a choice and firing the next generation."""
+    user_api_key = req.headers.get("x-openrouter-key")
     state = session_store.get(request.session_id)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -213,7 +229,7 @@ async def story_choose(request: StoryChooseRequest, background_tasks: Background
     if MOCK_PIPELINES:
         background_tasks.add_task(_mock_pipeline_task, job.job_id, request.session_id)
     else:
-        background_tasks.add_task(run_pipeline_task, job.job_id, request.session_id, request.choice_text)
+        background_tasks.add_task(run_pipeline_task, job.job_id, request.session_id, request.choice_text, user_api_key)
 
     return {"step_number": state.step_number, "session_id": request.session_id, "job_id": job.job_id}
 
@@ -257,20 +273,9 @@ async def legacy_get_status(id: str):
 async def generate(request: GenerateRequest, background_tasks: BackgroundTasks, req: Request = None):
     """
     Unified generate endpoint for first chapter AND subsequent chapters.
-
-    First chapter (session_id absent):
-        - Requires config + story_idea.
-        - Creates a new session, registers the protagonist image, fires generation.
-        - Returns { session_id, job_id }.
-
-    Next chapter (session_id present):
-        - Requires choice_text (the chosen option text).
-        - Looks up the existing session, advances conversation history, fires generation.
-        - Returns { session_id, job_id }.
-
-    The caller is expected to fire one job per available choice (pre-generation).
-    Each fires independently; only the job matching the user's selection matters.
     """
+    user_api_key = req.headers.get("x-openrouter-key") if req else None
+
     if not request.session_id:
         # ── First chapter ──────────────────────────────────────────────────
         if not request.config or not request.story_idea:
@@ -289,15 +294,11 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks, 
         except Exception as e:
             print(f"[API] RAG search failed (non-blocking): {e}")
 
-        # Extract user-provided API key from header (if any)
-        user_api_key = req.headers.get("x-openrouter-key") if req else None
-
         state = StoryState(
             config=safe_config,
             story_idea=request.story_idea,
             rag_context=rag_context or None,
             messages=[{"role": "user", "content": f"The story idea is: {request.story_idea}"}],
-            api_key_override=user_api_key or None,
         )
 
         # Register protagonist: frontend-uploaded photo > server dev fixture > nothing
@@ -316,12 +317,6 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks, 
 
     else:
         # ── Next chapter ───────────────────────────────────────────────────
-        # The frontend fires one job per available choice immediately after
-        # displaying a scene (pre-generation).  These jobs must NOT mutate the
-        # live session — each gets a snapshot with its own choice appended.
-        # The session history is advanced lazily: when the user fires the
-        # FOLLOWING round's pre-generation jobs, pass `prev_job_id` so we can
-        # commit the selected branch's history first.
         if not request.choice_text:
             raise HTTPException(status_code=422, detail="choice_text required for next chapter")
 
@@ -329,10 +324,6 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks, 
         if not state:
             raise HTTPException(status_code=404, detail="Session not found")
 
-        # If the caller tells us which job was selected in the previous round,
-        # commit that branch's history to the live session now.
-        # Guard against duplicate commits — every prefire call in a round sends
-        # the same prev_job_id, so only the first one actually writes.
         if request.prev_job_id and request.prev_job_id != state.last_committed_job_id:
             prev_job = job_store.get(request.prev_job_id)
             if prev_job and prev_job.status == StoryStatus.COMPLETE and prev_job.raw_text:
@@ -351,7 +342,7 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks, 
     # ── Create job and fire ────────────────────────────────────────────────
     job = job_store.create(state.session_id)
     branch_choice = request.choice_text or ""
-    background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, branch_choice, state.api_key_override)
+    background_tasks.add_task(run_pipeline_task, job.job_id, state.session_id, branch_choice, user_api_key)
 
     print(f"[API] Job {job.job_id} queued for session {state.session_id} step={state.step_number} choice='{branch_choice[:40]}'")
     return GenerateResponse(session_id=state.session_id, job_id=job.job_id)
@@ -378,10 +369,6 @@ async def add_character(request: AddCharacterRequest):
 async def generate_avatar(request: AvatarRequest, req: Request = None):
     """
     Generate a storybook portrait for a named side character.
-
-    Called when a family member is configured but has no uploaded reference photo.
-    The image is returned as a data-URI; the caller should then register it via
-    POST /story/character so the image pipeline can keep this character consistent.
     """
     from backend.pipelines.image import generate_image
     import base64
@@ -460,8 +447,6 @@ class SttRequest(_BaseModel):
 async def debug_stt(req: SttRequest):
     """
     Transcribe the given WAV audio (base64) with Whisper and compare to story_text.
-    Returns transcript + whether it matches the story_text (word-overlap %).
-    Temporary diagnostic — remove once audio bug is confirmed fixed.
     """
     try:
         wav_bytes = base64.b64decode(req.audio_b64)
@@ -536,9 +521,6 @@ async def debug_stt(req: SttRequest):
 async def upload_document(file: UploadFile = File(...), source_type: str = "upload"):
     """
     Upload a PDF document for RAG context.
-    Extracts text, chunks it, embeds via OpenRouter, stores in FAISS.
-
-    source_type: "upload" (admin storybook) or "exported_story" (re-uploaded story PDF).
     """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
@@ -587,8 +569,6 @@ async def delete_document(filename: str):
 async def save_story_memory(request: dict):
     """
     Save a completed story summary to RAG for cross-session memory.
-    Called by the frontend when a story ends — allows the child's story universe
-    to grow across sessions (reuse characters, reference past events).
     """
     summary = request.get("summary", "")
     child_name = request.get("child_name", "unknown")
@@ -611,28 +591,8 @@ async def save_story_memory(request: dict):
 @app.post("/story/export")
 async def export_story_pdf(request: dict):
     """
-    Generate a PDF booklet from a completed story.
-
-    Request body:
-    {
-      "child_name": "Leo",
-      "story_idea": "a brave knight",
-      "scenes": [
-        {
-          "story_text": "...",
-          "illustration_b64": "...",
-          "step_number": 0,
-          "is_ending": false,
-          "choice_made": "Follow the path"
-        },
-        ...
-      ]
-    }
-
-    Returns the PDF as base64 for frontend download.
+    Generate a PDF booklet from a completed story asynchronously to avoid blocking.
     """
-    from fastapi.responses import Response
-
     child_name = request.get("child_name", "Child")
     story_idea = request.get("story_idea", "a bedtime adventure")
     scenes = request.get("scenes", [])
@@ -640,10 +600,12 @@ async def export_story_pdf(request: dict):
     if not scenes:
         raise HTTPException(status_code=400, detail="No scenes provided.")
 
-    pdf_bytes = generate_story_pdf(child_name, story_idea, scenes)
+    # Run the CPU-bound PDF generation in a separate thread
+    pdf_bytes = await asyncio.to_thread(generate_story_pdf, child_name, story_idea, scenes)
 
-    return Response(
-        content=pdf_bytes,
+    # Stream the bytes back to the client
+    return StreamingResponse(
+        iter([pdf_bytes]),
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'attachment; filename="story_{child_name.lower().replace(" ", "_")}.pdf"'

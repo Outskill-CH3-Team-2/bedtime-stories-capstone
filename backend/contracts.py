@@ -157,4 +157,4 @@ class StoryState(BaseModel):
     # Key = character name (lowercase), value = CharacterRef with reference image.
     characters: Dict[str, CharacterRef] = {}
     # User-provided OpenRouter API key (stored in session memory only, never persisted)
-    api_key_override: Optional[str] = None
+    #api_key_override: Optional[str] = None

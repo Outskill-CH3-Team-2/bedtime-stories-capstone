@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StoryConfig, FamilyMember } from '../types';
+import { storyService } from '../services/storyService'; // Import storyService for validation
 
 // ── Input safety validation ───────────────────────────────────────────────────
 const _SUSPICIOUS_CHARS_RE = /[{}\[\]<>$`\\|%#^~_=@]/;
@@ -372,6 +373,8 @@ interface ConfigurationPageProps {
 const ConfigurationPage: React.FC<ConfigurationPageProps> = ({ config: initialConfig, onSave, onClose }) => {
   const [config, setConfig] = useState<StoryConfig>(initialConfig);
   const [previewUrl, setPreviewUrl] = useState<string | null>(initialConfig.childPhoto || null);
+  const [isValidating, setIsValidating] = useState(false);
+  const [keyError, setKeyError] = useState('');
 
   useEffect(() => {
     setConfig(initialConfig);
@@ -396,9 +399,23 @@ const ConfigurationPage: React.FC<ConfigurationPageProps> = ({ config: initialCo
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!config.privacyAcknowledged) return;
+    
+    // Validate API key if provided
+    if (config.openrouterApiKey?.trim()) {
+      setIsValidating(true);
+      setKeyError('');
+      const isValid = await storyService.validateKey(config.openrouterApiKey);
+      setIsValidating(false);
+      
+      if (!isValid) {
+        setKeyError('Invalid API Key. Please check your OpenRouter key and try again.');
+        return;
+      }
+    }
+    
     onSave(config);
   };
 
@@ -579,11 +596,15 @@ const ConfigurationPage: React.FC<ConfigurationPageProps> = ({ config: initialCo
               id="openrouterApiKey"
               name="openrouterApiKey"
               value={config.openrouterApiKey || ''}
-              onChange={e => setConfig(prev => ({ ...prev, openrouterApiKey: e.target.value }))}
+              onChange={e => {
+                setConfig(prev => ({ ...prev, openrouterApiKey: e.target.value }));
+                setKeyError('');
+              }}
               placeholder="sk-or-v1-..."
               autoComplete="off"
               className="w-full bg-[#fcf9f2] border border-[#d4c48a] rounded-sm p-2.5 outline-none focus:border-[#8b4513] transition-colors shadow-inner font-mono text-sm"
             />
+            {keyError && <p className="text-xs text-[#c0392b] mt-1 font-semibold">{keyError}</p>}
             <p className="text-xs italic opacity-60 mt-1 mb-4">
               Your key stays in your browser and is sent only to the story server. Never shared or stored server-side.
             </p>
@@ -658,16 +679,17 @@ const ConfigurationPage: React.FC<ConfigurationPageProps> = ({ config: initialCo
           <div className="pt-6 border-t border-[#8b4513]/20">
             <button
               type="submit"
-              disabled={!config.privacyAcknowledged}
+              disabled={!config.privacyAcknowledged || isValidating}
               title={!config.privacyAcknowledged ? 'Please acknowledge the privacy notice above to continue' : undefined}
-              className="w-full py-4 font-cinzel text-sm rounded-sm transition-all shadow-xl uppercase tracking-[0.3em]"
+              className="w-full py-4 font-cinzel text-sm rounded-sm transition-all shadow-xl uppercase tracking-[0.3em] flex items-center justify-center"
               style={{
-                background: config.privacyAcknowledged ? '#8b4513' : 'rgba(139,69,19,0.3)',
-                color: config.privacyAcknowledged ? '#f2e8cf' : 'rgba(242,232,207,0.5)',
-                cursor: config.privacyAcknowledged ? 'pointer' : 'not-allowed',
+                background: config.privacyAcknowledged && !isValidating ? '#8b4513' : 'rgba(139,69,19,0.3)',
+                color: config.privacyAcknowledged && !isValidating ? '#f2e8cf' : 'rgba(242,232,207,0.5)',
+                cursor: config.privacyAcknowledged && !isValidating ? 'pointer' : 'not-allowed',
               }}
             >
-              Save and Begin the Story
+              {isValidating ? <span className="spin-ring-sm mr-2" /> : null}
+              {isValidating ? 'Validating Key...' : 'Save and Begin the Story'}
             </button>
           </div>
 
