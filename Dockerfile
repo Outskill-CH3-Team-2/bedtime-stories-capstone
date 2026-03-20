@@ -1,21 +1,20 @@
 # --- Stage 1: Build Frontend ---
-# We use Node to compile the React/Vite app into static files
-FROM node:18-alpine AS frontend-builder
+# USING NODE 20 to bypass the known npm v8 bug with optional dependencies
+FROM node:20-slim AS frontend-builder
 WORKDIR /app/frontend
 
-# Install dependencies first (better for Docker caching)
-COPY frontend/package*.json ./
-RUN npm install
-
-# Copy the rest of the frontend source
+# 1. Copy EVERYTHING from the frontend folder
 COPY frontend/ ./
 
+# 2. Clean slate and install using the fixed npm version
+RUN rm -rf node_modules package-lock.json && \
+    npm install
+
 # Inject the production backend URL during the build process
-# This ensures the frontend knows where to send API requests
 ARG VITE_BACKEND_URL
 ENV VITE_BACKEND_URL=$VITE_BACKEND_URL
 
-# Build the production-ready static files (HTML/JS/CSS)
+# 3. Build the production-ready static files
 RUN npm run build
 
 # --- Stage 2: Final Production Image ---
@@ -25,7 +24,7 @@ WORKDIR /app
 
 # Install system-level dependencies required for FAISS (RAG) and PDF parsing
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
+    libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
