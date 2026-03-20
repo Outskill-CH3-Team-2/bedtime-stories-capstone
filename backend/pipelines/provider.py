@@ -9,12 +9,19 @@ API layer when a user provides their own OpenRouter key.
 """
 
 import os
+from pathlib import Path
 from contextvars import ContextVar
 from functools import lru_cache
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
-load_dotenv()
+# 1. Safely locate the root .env file (up 3 levels: pipelines -> backend -> root)
+_ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+load_dotenv(dotenv_path=_ROOT_DIR / ".env")
+
+# 2. Read full URL if deployed (FRONTEND_URL), fallback to localhost + port if local
+FRONTEND_PORT = os.getenv("FRONTEND_PORT", "3000")
+FRONTEND_URL = os.getenv("FRONTEND_URL", f"http://localhost:{FRONTEND_PORT}")
 
 # Per-request API key override (set by main.py before pipeline runs)
 _api_key_override: ContextVar[str | None] = ContextVar("_api_key_override", default=None)
@@ -36,7 +43,7 @@ def _get_default_client() -> AsyncOpenAI:
         api_key=api_key,
         base_url="https://openrouter.ai/api/v1",
         default_headers={
-            "HTTP-Referer": "http://localhost:3000",
+            "HTTP-Referer": FRONTEND_URL,  # <--- USED HERE
             "X-Title": "Story Weaver",
         },
     )
@@ -55,7 +62,7 @@ def get_client() -> AsyncOpenAI:
             api_key=override,
             base_url="https://openrouter.ai/api/v1",
             default_headers={
-                "HTTP-Referer": "http://localhost:3000",
+                "HTTP-Referer": FRONTEND_URL,  # <--- AND USED HERE
                 "X-Title": "Story Weaver",
             },
         )

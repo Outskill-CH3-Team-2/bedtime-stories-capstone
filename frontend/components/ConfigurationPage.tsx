@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { StoryConfig, FamilyMember } from '../types';
+import { storyService } from '../services/storyService';
 
 // ── Input safety validation ───────────────────────────────────────────────────
 const _SUSPICIOUS_CHARS_RE = /[{}\[\]<>$`\\|%#^~_=@]/;
@@ -120,12 +121,12 @@ const MultiChipSelect: React.FC<MultiChipSelectProps> = ({ label, presets, value
           onChange={e => { setCustomInput(e.target.value); setInputWarn(false); }}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } }}
           placeholder="Add custom…"
-          className="flex-1 bg-[#fcf9f2] border border-[#d4c48a] rounded-sm px-2 py-1.5 text-sm outline-none focus:border-[#8b4513] transition-colors shadow-inner font-serif"
+          className="flex-1 min-w-[80px] bg-[#fcf9f2] border border-[#d4c48a] rounded-sm px-2 py-1.5 text-sm outline-none focus:border-[#8b4513] transition-colors shadow-inner font-serif"
         />
         <button
           type="button"
           onClick={addCustom}
-          className="text-xs font-cinzel tracking-wide uppercase border border-[#8b4513]/30 rounded-sm px-3 hover:border-[#8b4513] hover:bg-[#8b4513]/5 text-[#8b4513] transition-all"
+          className="flex-shrink-0 whitespace-nowrap text-xs font-cinzel tracking-wide uppercase border border-[#8b4513]/30 rounded-sm px-3 hover:border-[#8b4513] hover:bg-[#8b4513]/5 text-[#8b4513] transition-all"
         >
           + Add
         </button>
@@ -144,7 +145,6 @@ interface CharacterCardProps {
   member: FamilyMember;
   onChange: (updated: FamilyMember) => void;
   onRemove?: () => void;
-  /** If true, relation label is read-only display; otherwise editable */
   fixedRelation?: boolean;
 }
 
@@ -186,7 +186,6 @@ const CharacterCard: React.FC<CharacterCardProps> = ({ member, onChange, onRemov
       position: 'relative',
       boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
     }}>
-      {/* Remove button */}
       {onRemove && (
         <button
           type="button"
@@ -204,12 +203,7 @@ const CharacterCard: React.FC<CharacterCardProps> = ({ member, onChange, onRemov
         >×</button>
       )}
 
-      {/* Photo upload */}
-      <label
-        className="cursor-pointer"
-        title={member.photo ? 'Change photo' : 'Add reference photo (optional)'}
-        style={{ marginTop: onRemove ? 6 : 0 }}
-      >
+      <label className="cursor-pointer" style={{ marginTop: onRemove ? 6 : 0 }}>
         {member.photo ? (
           <img
             src={member.photo}
@@ -230,15 +224,8 @@ const CharacterCard: React.FC<CharacterCardProps> = ({ member, onChange, onRemov
         <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={handlePhoto} />
       </label>
 
-      {/* Relation — editable or fixed label */}
       {fixedRelation ? (
-        <span style={{
-          fontSize: 10, color: '#8b4513',
-          fontFamily: "'Cinzel', serif",
-          letterSpacing: '0.06em',
-          textTransform: 'uppercase',
-          textAlign: 'center',
-        }}>
+        <span style={{ fontSize: 10, color: '#8b4513', fontFamily: "'Cinzel', serif", letterSpacing: '0.06em', textTransform: 'uppercase' }}>
           {member.relation || '—'}
         </span>
       ) : (
@@ -246,12 +233,11 @@ const CharacterCard: React.FC<CharacterCardProps> = ({ member, onChange, onRemov
           type="text"
           value={member.relation}
           onChange={e => onChange({ ...member, relation: e.target.value })}
-          placeholder="Role (e.g. Sister)"
+          placeholder="Role"
           style={{ ...CARD_INPUT_STYLE, fontSize: 11, fontFamily: "'Cinzel', serif" }}
         />
       )}
 
-      {/* Name */}
       <SafeInput
         type="text"
         value={member.name}
@@ -260,25 +246,13 @@ const CharacterCard: React.FC<CharacterCardProps> = ({ member, onChange, onRemov
         style={{ ...CARD_INPUT_STYLE, fontSize: 13, fontWeight: 600 }}
       />
 
-      {/* Age */}
       <input
         type="number"
         min="0"
-        max="120"
         value={member.age ?? ''}
         onChange={e => onChange({ ...member, age: e.target.value })}
         placeholder="Age"
         style={CARD_INPUT_STYLE}
-      />
-
-      {/* Favourites */}
-      <input
-        type="text"
-        value={member.favourites ?? ''}
-        onChange={e => onChange({ ...member, favourites: e.target.value })}
-        placeholder="Loves…"
-        maxLength={60}
-        style={{ ...CARD_INPUT_STYLE, fontStyle: 'italic', fontSize: 11 }}
       />
     </div>
   );
@@ -290,11 +264,8 @@ interface CharacterCarouselProps {
   members: FamilyMember[];
   addLabel: string;
   onChange: (members: FamilyMember[]) => void;
-  /** Default relation string pre-filled on new cards (e.g. 'Sibling') */
   defaultRelation?: string;
-  /** If true, relation column is a read-only badge (pre-set like Mother/Father) */
   fixedRelations?: boolean;
-  /** If true, cards cannot be removed */
   noRemove?: boolean;
 }
 
@@ -320,49 +291,28 @@ const CharacterCarousel: React.FC<CharacterCarouselProps> = ({
             fixedRelation={fixedRelations}
           />
         ))}
-        {/* Add button — styled as a ghost card */}
         <button
           type="button"
           onClick={add}
           style={{
-            width: 80,
-            minHeight: 200,
-            flexShrink: 0,
-            border: '1px dashed #c9a87c',
-            borderRadius: 6,
-            background: 'transparent',
-            cursor: 'pointer',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 6,
-            color: '#8b4513',
+            width: 80, minHeight: 180, flexShrink: 0, border: '1px dashed #c9a87c',
+            borderRadius: 6, cursor: 'pointer', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', justifyContent: 'center', color: '#8b4513',
           }}
         >
-          <span style={{ fontSize: 24, lineHeight: 1 }}>+</span>
-          <span style={{
-            fontSize: 9,
-            fontFamily: "'Cinzel', serif",
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-            textAlign: 'center',
-            lineHeight: 1.3,
-          }}>
-            {addLabel}
-          </span>
+          <span style={{ fontSize: 24 }}>+</span>
+          <span style={{ fontSize: 9, fontFamily: "'Cinzel', serif", textTransform: 'uppercase' }}>{addLabel}</span>
         </button>
       </div>
     </div>
   );
 };
 
-// ── Preset data ───────────────────────────────────────────────────────────────
 const PRESET_FOODS      = ['Pizza', 'Ice cream', 'Fruit', 'Cake', 'Pancakes', 'Pasta', 'Cookies'];
 const PRESET_COLORS     = ['Red', 'Blue', 'Yellow', 'Green', 'Purple', 'Pink', 'Orange'];
-const PRESET_ACTIVITIES = ['Playing outside', 'Drawing', 'Reading', 'Riding a bicycle', 'Playing with friends', 'Singing', 'Building with blocks'];
+const PRESET_ACTIVITIES = ['Playing outside', 'Drawing', 'Reading', 'Riding a bicycle', 'Singing'];
 
-// ── Main component ────────────────────────────────────────────────────────────
+// ── Main Component ────────────────────────────────────────────────────────────
 interface ConfigurationPageProps {
   config: StoryConfig;
   onSave: (config: StoryConfig) => void;
@@ -372,10 +322,28 @@ interface ConfigurationPageProps {
 const ConfigurationPage: React.FC<ConfigurationPageProps> = ({ config: initialConfig, onSave, onClose }) => {
   const [config, setConfig] = useState<StoryConfig>(initialConfig);
   const [previewUrl, setPreviewUrl] = useState<string | null>(initialConfig.childPhoto || null);
+  const [isValidating, setIsValidating] = useState(false);
+  const [keyError, setKeyError] = useState('');
+  const [libraryFiles, setLibraryFiles] = useState<{name: string, chunks: number, source: string}[]>([]);
+
+  const refreshLibrary = async () => {
+    try {
+      const data = await storyService.getLibrary();
+      const files = Object.entries(data.files || {}).map(([name, info]: [string, any]) => ({
+        name,
+        chunks: info.chunk_count,
+        source: info.source_type
+      }));
+      setLibraryFiles(files);
+    } catch (e) {
+      console.warn("Could not fetch library:", e);
+    }
+  };
 
   useEffect(() => {
     setConfig(initialConfig);
     setPreviewUrl(initialConfig.childPhoto || null);
+    refreshLibrary();
   }, [initialConfig]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -396,278 +364,140 @@ const ConfigurationPage: React.FC<ConfigurationPageProps> = ({ config: initialCo
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const removeFile = async (filename: string) => {
+    if (!confirm(`Remove "${filename}" from the story library?`)) return;
+    try {
+      const baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+      const response = await fetch(`${baseUrl}/story/library/${filename}`, { method: 'DELETE' });
+      if (response.ok) refreshLibrary();
+    } catch (e) {
+      alert("Failed to delete file.");
+    }
+  };
+
+  const clearAllLibrary = async () => {
+    if (!confirm("Clear all documents from the library? This cannot be undone.")) return;
+    const baseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+    for (const file of libraryFiles) {
+      await fetch(`${baseUrl}/story/library/${file.name}`, { method: 'DELETE' });
+    }
+    refreshLibrary();
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!config.privacyAcknowledged) return;
+    
+    if (config.openrouterApiKey?.trim()) {
+      setIsValidating(true);
+      setKeyError('');
+      const isValid = await storyService.validateKey(config.openrouterApiKey);
+      setIsValidating(false);
+      
+      if (!isValid) {
+        setKeyError('Invalid API Key. Please check your OpenRouter key.');
+        return;
+      }
+    }
     onSave(config);
   };
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'rgba(8, 4, 1, 0.88)',
-      zIndex: 50, padding: '1rem'
-    }}>
-      <div className="relative animate-fadeIn w-full max-w-2xl max-h-[90vh] overflow-y-auto custom-scrollbar" style={{
-        background: 'linear-gradient(135deg, #f5edd8 0%, #e8dab8 100%)',
-        borderRadius: '4px',
-        boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5), inset 0 0 0 1px rgba(139, 69, 19, 0.1)',
-        padding: '2rem 2.5rem',
-        color: '#2c1810',
-        border: '4px solid #3d1f0d'
-      }}>
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 text-[#8b4513] hover:text-[#3d1f0d] transition-colors"
-          style={{ padding: '0.5rem' }}
-          aria-label="Close"
-        >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
+    <div style={{ position: 'fixed', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(8, 4, 1, 0.88)', zIndex: 50, padding: '1rem' }}>
+      <div className="relative animate-fadeIn w-full max-w-2xl max-h-[90vh] overflow-y-auto custom-scrollbar" style={{ background: 'linear-gradient(135deg, #f5edd8 0%, #e8dab8 100%)', borderRadius: '4px', border: '4px solid #3d1f0d', padding: '2rem 2.5rem', color: '#2c1810' }}>
+        
+        <button onClick={onClose} className="absolute top-4 right-4 text-[#8b4513] hover:text-[#3d1f0d]">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
         </button>
 
         <div className="mb-8 text-center border-b border-[#8b4513]/20 pb-6">
-          <h2 className="font-cinzel text-2xl font-bold mb-2">Let's Personalize the Story</h2>
-          <p className="font-serif italic text-sm opacity-80">A few details help us create a story your child will love.</p>
+          <h2 className="font-cinzel text-2xl font-bold mb-2">Personalize the Story</h2>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-8 font-serif">
-
-          {/* ── Child Profile ────────────────────────────────────────────── */}
+          
           <section>
-            <h3 className="font-cinzel text-lg mb-4 text-[#3d1f0d] border-b border-[#8b4513]/10 pb-1 inline-block">Child Profile</h3>
+            <h3 className="font-cinzel text-lg mb-4 text-[#3d1f0d] border-b border-[#8b4513]/10 pb-1">Child Profile</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <label className="block text-sm font-semibold mb-1" htmlFor="childName">Child's Name</label>
-                <SafeInput
-                  type="text" id="childName" name="childName" value={config.childName} onChange={handleChange} required
-                  className="w-full bg-[#fcf9f2] border border-[#d4c48a] rounded-sm p-2.5 outline-none focus:border-[#8b4513] transition-colors shadow-inner"
-                  placeholder="e.g. Arlo"
-                />
+                <label className="block text-sm font-semibold mb-1">Name</label>
+                <SafeInput type="text" name="childName" value={config.childName} onChange={handleChange} required className="w-full bg-[#fcf9f2] border border-[#d4c48a] p-2.5 outline-none" />
               </div>
               <div>
-                <label className="block text-sm font-semibold mb-1" htmlFor="age">Age</label>
-                <input
-                  type="number"
-                  id="age"
-                  name="age"
-                  min="1"
-                  max="12"
-                  value={config.age || ''}
-                  onChange={handleChange}
-                  placeholder="e.g. 5"
-                  className="w-full bg-[#fcf9f2] border border-[#d4c48a] rounded-sm p-2.5 outline-none focus:border-[#8b4513] transition-colors shadow-inner"
-                />
-                <p className="text-xs italic opacity-70 mt-1">Used to adjust story language and difficulty.</p>
+                <label className="block text-sm font-semibold mb-1">Age</label>
+                <input type="number" name="age" min="1" max="12" value={config.age || ''} onChange={handleChange} className="w-full bg-[#fcf9f2] border border-[#d4c48a] p-2.5 outline-none" />
               </div>
             </div>
           </section>
 
-          {/* ── Favorites ────────────────────────────────────────────────── */}
           <section>
-            <h3 className="font-cinzel text-lg mb-4 text-[#3d1f0d] border-b border-[#8b4513]/10 pb-1 inline-block">Favorites</h3>
-            <p className="text-xs italic opacity-60 mb-4">Pick as many as you like, or type a custom one and press Enter / + Add.</p>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <MultiChipSelect
-                label="Favourite Foods"
-                presets={PRESET_FOODS}
-                value={config.favoriteFoods}
-                onChange={v => setConfig(prev => ({ ...prev, favoriteFoods: v }))}
-              />
-              <MultiChipSelect
-                label="Favourite Colors"
-                presets={PRESET_COLORS}
-                value={config.favoriteColors}
-                onChange={v => setConfig(prev => ({ ...prev, favoriteColors: v }))}
-              />
-              <MultiChipSelect
-                label="Favourite Activities"
-                presets={PRESET_ACTIVITIES}
-                value={config.favoriteActivities}
-                onChange={v => setConfig(prev => ({ ...prev, favoriteActivities: v }))}
-              />
+            <h3 className="font-cinzel text-lg mb-4 text-[#3d1f0d] border-b border-[#8b4513]/10 pb-1">Favorites</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              <MultiChipSelect label="Foods" presets={PRESET_FOODS} value={config.favoriteFoods} onChange={v => setConfig(p => ({ ...p, favoriteFoods: v }))} />
+              <MultiChipSelect label="Colors" presets={PRESET_COLORS} value={config.favoriteColors} onChange={v => setConfig(p => ({ ...p, favoriteColors: v }))} />
+              <MultiChipSelect label="Activities" presets={PRESET_ACTIVITIES} value={config.favoriteActivities} onChange={v => setConfig(p => ({ ...p, favoriteActivities: v }))} />
             </div>
           </section>
 
-          {/* ── Companions & Family — all use the same CharacterCarousel ─── */}
-          <section>
-            <h3 className="font-cinzel text-lg mb-2 text-[#3d1f0d] border-b border-[#8b4513]/10 pb-1 inline-block">Companions & Family</h3>
-            <p className="text-xs italic opacity-60 mb-4">
-              Each card has a name, age, favourite things, and an optional photo. Tap the avatar to upload one.
-            </p>
-            <div className="space-y-6">
-
-              <CharacterCarousel
-                label="Companions (pets, friends…)"
-                members={config.companions}
-                addLabel="Add"
-                defaultRelation=""
-                onChange={members => setConfig(prev => ({ ...prev, companions: members }))}
-              />
-
-              <CharacterCarousel
-                label="Siblings"
-                members={config.siblings}
-                addLabel="Add sibling"
-                defaultRelation="Sibling"
-                onChange={members => setConfig(prev => ({ ...prev, siblings: members }))}
-              />
-
-              <CharacterCarousel
-                label="Parents"
-                members={config.parents}
-                addLabel="Add parent"
-                defaultRelation="Parent"
-                fixedRelations
-                onChange={members => setConfig(prev => ({ ...prev, parents: members }))}
-              />
-
-              <CharacterCarousel
-                label="Grandparents"
-                members={config.grandparents}
-                addLabel="Add grandparent"
-                defaultRelation="Grandparent"
-                fixedRelations
-                onChange={members => setConfig(prev => ({ ...prev, grandparents: members }))}
-              />
-
-            </div>
-          </section>
-
-          {/* ── Child Picture Upload ──────────────────────────────────────── */}
+          {/* ── Knowledge Library (RAG) ─────────────────────────────────── */}
           <section className="bg-[#fcf9f2]/50 p-4 rounded-sm border border-[#d4c48a]/50">
-            <h3 className="font-cinzel text-lg mb-2 text-[#3d1f0d]">Child Picture (Optional)</h3>
-            <p className="text-xs italic opacity-70 mb-4">
-              Upload a photo to keep the child's appearance consistent across all illustrations.
-              This stays on your device.
-            </p>
-            <div className="flex items-center gap-6">
-              <div className="flex-1">
-                <label htmlFor="childPhoto" className="cursor-pointer inline-flex items-center justify-center px-4 py-2 border border-[#8b4513] rounded-sm text-sm font-cinzel tracking-widest uppercase hover:bg-[#8b4513] hover:text-[#f2e8cf] transition-all w-full text-center">
-                  Select Picture
-                </label>
-                <input
-                  type="file" id="childPhoto" name="childPhoto" accept=".jpg,.jpeg,.png" onChange={handleImageUpload}
-                  className="hidden"
-                />
-              </div>
-              {previewUrl ? (
-                <div className="w-20 h-20 rounded-full overflow-hidden border-2 border-[#8b4513] shadow-md flex-shrink-0">
-                  <img src={previewUrl} alt="Preview" className="w-full h-full object-cover" />
-                </div>
+            <h3 className="font-cinzel text-lg mb-2 text-[#3d1f0d]">Story Library</h3>
+            <div className="flex flex-col gap-3 mb-6">
+              <label className="cursor-pointer inline-flex items-center justify-center px-4 py-2 border border-[#8b4513]/40 rounded-sm text-xs font-cinzel tracking-widest uppercase hover:bg-[#8b4513]/5 transition-all w-full text-center">
+                Upload Style Reference (PDF)
+                <input type="file" accept=".pdf" className="hidden" onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    try {
+                      const res = await storyService.uploadDocument(file);
+                      alert(`Indexed ${res.chunks_added} sections.`);
+                      refreshLibrary();
+                    } catch (err: any) { alert(`Failed: ${err.message}`); }
+                  }
+                }} />
+              </label>
+            </div>
+            <div className="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
+              <h4 className="text-[10px] font-cinzel tracking-widest uppercase opacity-50 mb-2">Indexed Documents</h4>
+              {libraryFiles.length === 0 ? (
+                <p className="text-xs italic opacity-40 text-center py-2">Library is empty.</p>
               ) : (
-                <div className="w-20 h-20 rounded-full border-2 border-dashed border-[#8b4513]/30 flex items-center justify-center text-[#8b4513]/40 flex-shrink-0 bg-[#fcf9f2]">
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.662V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.662"/></svg>
-                </div>
+                libraryFiles.map((file) => (
+                  <div key={file.name} className="flex items-center justify-between bg-white/40 p-2 rounded-sm border border-[#d4c48a]/30">
+                    <div className="flex flex-col">
+                      <span className="text-xs font-medium truncate max-w-[180px]">{file.name}</span>
+                      <span className="text-[9px] opacity-50 uppercase">{file.chunks} chunks • {file.source}</span>
+                    </div>
+                    <button type="button" onClick={() => removeFile(file.name)} className="text-[#c0392b] p-1">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18m-2 0v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6m3 0V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                    </button>
+                  </div>
+                ))
               )}
             </div>
+            {libraryFiles.length > 0 && (
+              <button type="button" onClick={clearAllLibrary} className="mt-4 w-full text-[10px] font-cinzel text-[#c0392b]/60 hover:text-[#c0392b]">
+                Clear Entire Library
+              </button>
+            )}
           </section>
 
-          {/* ── API Settings ──────────────────────────────────────────────── */}
-          <section className="bg-[#fcf9f2]/50 p-4 rounded-sm border border-[#d4c48a]/50">
-            <h3 className="font-cinzel text-lg mb-2 text-[#3d1f0d]">API Settings (Optional)</h3>
-            <p className="text-xs italic opacity-70 mb-3">
-              This app uses <a href="https://openrouter.ai" target="_blank" rel="noopener noreferrer" className="underline text-[#8b4513]">OpenRouter</a> to
-              generate stories. You can provide your own API key to use your own credits instead of the shared demo key.
-            </p>
-
-            <label className="block text-sm font-semibold mb-1" htmlFor="openrouterApiKey">OpenRouter API Key</label>
-            <input
-              type="password"
-              id="openrouterApiKey"
-              name="openrouterApiKey"
-              value={config.openrouterApiKey || ''}
-              onChange={e => setConfig(prev => ({ ...prev, openrouterApiKey: e.target.value }))}
-              placeholder="sk-or-v1-..."
-              autoComplete="off"
-              className="w-full bg-[#fcf9f2] border border-[#d4c48a] rounded-sm p-2.5 outline-none focus:border-[#8b4513] transition-colors shadow-inner font-mono text-sm"
-            />
-            <p className="text-xs italic opacity-60 mt-1 mb-4">
-              Your key stays in your browser and is sent only to the story server. Never shared or stored server-side.
-            </p>
-
-            {/* Cost estimate table */}
-            <div className="border border-[#d4c48a]/60 rounded-sm overflow-hidden">
-              <div className="bg-[#f0e8d4] px-3 py-1.5 border-b border-[#d4c48a]/60">
-                <span className="font-cinzel text-xs font-bold tracking-wide uppercase text-[#3d1f0d]">Estimated Cost per Story</span>
-              </div>
-              <div className="px-3 py-2 text-xs font-serif space-y-1">
-                <div className="flex justify-between">
-                  <span className="opacity-70">Text generation (GPT-4o)</span>
-                  <span className="font-semibold">~$0.02 / scene</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="opacity-70">Safety check (GPT-4o-mini)</span>
-                  <span className="font-semibold">~$0.001 / scene</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="opacity-70">Illustration (Gemini Flash)</span>
-                  <span className="font-semibold">~$0.04 / scene</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="opacity-70">Narration audio (GPT-4o Audio)</span>
-                  <span className="font-semibold">~$0.05 / scene</span>
-                </div>
-                <div className="flex justify-between border-t border-[#d4c48a]/40 pt-1 mt-1">
-                  <span className="opacity-70">Per scene total</span>
-                  <span className="font-semibold">~$0.10 &ndash; $0.15</span>
-                </div>
-                <div className="flex justify-between font-bold text-[#3d1f0d]">
-                  <span>Full story (6&ndash;8 scenes)</span>
-                  <span>~$1.00 &ndash; $2.00</span>
-                </div>
-              </div>
-            </div>
+          <section className="bg-[#fcf9f2]/50 p-4 border border-[#d4c48a]/50">
+            <h3 className="font-cinzel text-lg mb-2 text-[#3d1f0d]">API Settings</h3>
+            <input type="password" name="openrouterApiKey" value={config.openrouterApiKey || ''} onChange={e => { setConfig(p => ({ ...p, openrouterApiKey: e.target.value })); setKeyError(''); }} placeholder="sk-or-v1-..." className="w-full bg-[#fcf9f2] border border-[#d4c48a] p-2.5 outline-none font-mono text-sm" />
+            {keyError && <p className="text-xs text-[#c0392b] mt-1 font-semibold">{keyError}</p>}
           </section>
 
-          {/* ── Privacy Disclaimer ───────────────────────────────────────── */}
-          {!config.privacyAcknowledged ? (
-            <section className="border-2 border-[#8b4513]/40 rounded-sm p-4 bg-[#fffbf2]">
-              <div className="flex items-start gap-2 mb-3">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8b4513" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-0.5">
-                  <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                  <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
-                </svg>
-                <h3 className="font-cinzel text-sm font-bold text-[#3d1f0d]">Data &amp; Privacy Notice</h3>
-              </div>
-              <p className="text-xs font-serif italic opacity-80 leading-relaxed mb-4">
-                By using this feature, you acknowledge that character preferences and reference pictures are processed by 3rd-party AI tools.
-                While Dream Weaver does not store this data, we cannot guarantee the data retention or usage policies of these 3rd-party providers.
-              </p>
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={config.privacyAcknowledged}
-                  onChange={e => setConfig(prev => ({ ...prev, privacyAcknowledged: e.target.checked }))}
-                  className="accent-[#8b4513] w-4 h-4"
-                />
-                <span className="text-xs font-semibold">I understand and agree to proceed</span>
-              </label>
-            </section>
-          ) : (
-            <section className="flex items-center gap-2 px-3 py-2 rounded-sm bg-[#f0ebe0] border border-[#d4c48a]/60">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8b9e6a" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
-                <polyline points="20 6 9 17 4 12"/>
-              </svg>
-              <p className="text-xs font-serif italic opacity-60">Privacy notice acknowledged — data is processed by 3rd-party AI tools.</p>
-            </section>
-          )}
+          <section className="border-2 border-[#8b4513]/40 p-4 bg-[#fffbf2]">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input type="checkbox" checked={config.privacyAcknowledged} onChange={e => setConfig(p => ({ ...p, privacyAcknowledged: e.target.checked }))} className="accent-[#8b4513] w-4 h-4" />
+              <span className="text-xs font-semibold">I understand and agree to the privacy notice.</span>
+            </label>
+          </section>
 
           <div className="pt-6 border-t border-[#8b4513]/20">
-            <button
-              type="submit"
-              disabled={!config.privacyAcknowledged}
-              title={!config.privacyAcknowledged ? 'Please acknowledge the privacy notice above to continue' : undefined}
-              className="w-full py-4 font-cinzel text-sm rounded-sm transition-all shadow-xl uppercase tracking-[0.3em]"
-              style={{
-                background: config.privacyAcknowledged ? '#8b4513' : 'rgba(139,69,19,0.3)',
-                color: config.privacyAcknowledged ? '#f2e8cf' : 'rgba(242,232,207,0.5)',
-                cursor: config.privacyAcknowledged ? 'pointer' : 'not-allowed',
-              }}
-            >
-              Save and Begin the Story
+            <button type="submit" disabled={!config.privacyAcknowledged || isValidating} className="w-full py-4 font-cinzel text-sm rounded-sm shadow-xl uppercase tracking-[0.3em] flex items-center justify-center" style={{ background: config.privacyAcknowledged && !isValidating ? '#8b4513' : 'rgba(139,69,19,0.3)', color: '#f2e8cf' }}>
+              {isValidating ? 'Validating Key...' : 'Save and Begin'}
             </button>
           </div>
 

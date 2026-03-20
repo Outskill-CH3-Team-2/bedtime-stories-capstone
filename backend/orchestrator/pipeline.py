@@ -4,6 +4,7 @@ orchestrator/pipeline.py — LangGraph-powered Story Weaver pipeline.
 
 from __future__ import annotations
 
+import tempfile
 import asyncio
 import os
 import re
@@ -370,11 +371,19 @@ _compiled_graph = _build_graph().compile()
 # ---------------------------------------------------------------------------
 
 # Directory where debug artefacts (text / audio / image) are written.
-_DEBUG_OUTPUT_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "backend", "debug_output",
-)
+# 1. Get the raw value from .env or fallback to a default placeholder
+_raw_debug_path = os.getenv("DEBUG_OUTPUT_DIR", "TEMPDIR/storyweaver_debug")
 
+# 2. If the placeholder 'TEMPDIR' exists, swap it for the real OS path
+if "TEMPDIR" in _raw_debug_path:
+    _os_temp = tempfile.gettempdir()
+    _DEBUG_OUTPUT_DIR = _raw_debug_path.replace("TEMPDIR", _os_temp)
+else:
+    # Otherwise, use the path exactly as written in .env
+    _DEBUG_OUTPUT_DIR = _raw_debug_path
+
+# Ensure the path uses correct slashes for the current OS (Windows vs Linux)
+_DEBUG_OUTPUT_DIR = os.path.normpath(_DEBUG_OUTPUT_DIR)
 
 def _write_debug_artefacts(
     *,

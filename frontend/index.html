@@ -5,6 +5,15 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dream Weaver</title>
+  <meta http-equiv="Content-Security-Policy" content="
+    default-src 'self'; 
+    connect-src 'self' %VITE_BACKEND_URL% https://openrouter.ai https://drive.google.com;
+    img-src 'self' data: blob: https://drive.google.com;
+    media-src 'self' data: blob: https://drive.google.com;
+    script-src 'self' 'unsafe-inline';
+    style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
+    font-src 'self' https://fonts.gstatic.com;
+  ">
   <link
     href="https://fonts.googleapis.com/css2?family=Crimson+Text:ital,wght@0,400;0,600;0,700;1,400&family=Cinzel:wght@400;700;900&display=swap"
     rel="stylesheet">
