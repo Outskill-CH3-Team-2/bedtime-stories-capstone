@@ -39,6 +39,18 @@ def download_file(url: str, dest_path: str) -> bool:
         for chunk in response.iter_content(chunk_size=65536):
             if chunk:
                 f.write(chunk)
+
+    # Validate downloaded file
+    file_size = os.path.getsize(dest_path)
+    content_type = response.headers.get("Content-Type", "")
+    print(f"  downloaded: {file_size:,} bytes  content-type={content_type}")
+
+    # Detect HTML error pages saved as binary files
+    if file_size < 10_000 and dest_path.endswith((".mp4", ".mp3", ".png", ".jpg")):
+        print(f"  WARNING: {dest_path} is suspiciously small ({file_size} bytes) — possible failed download")
+        os.remove(dest_path)
+        return False
+
     return True
 
 

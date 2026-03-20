@@ -136,6 +136,7 @@ const IntroScreen: React.FC<IntroScreenProps> = ({ storyReady, onContinue }) => 
             ref={videoRef}
             src="/BedtimeStoryIntro.mp4"
             autoPlay
+            muted
             loop
             playsInline
             style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
