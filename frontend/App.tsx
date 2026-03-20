@@ -377,10 +377,7 @@ const App: React.FC = () => {
               prefireNextChapterJobs(result.session_id, result.choices);
             }
           }
-          if (result.narration_audio_b64) {
-            storyService.debugStt(jobId, result.narration_audio_b64, result.story_text);
-          }
-        } else if (status === 'failed') {
+         } else if (status === 'failed') {
           stopPolling();
           startingRef.current = false; // Unlock ref on backend failure
           setState(prev => ({ ...prev, status: 'error', error: 'The ink failed to bind to the page.' }));

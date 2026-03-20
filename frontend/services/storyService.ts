@@ -2,7 +2,7 @@ import { Scene, PrefiredJob, StoryConfig } from '../types';
 import { storyCache, deleteDb } from './storyCache';
 
 // In production (same origin), use relative URLs. In dev, target localhost:8000.
-const API_BASE = import.meta.env.DEV ? 'http://localhost:8000' : '';
+const API_BASE = import.meta.env.DEV ? (import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000') : '';
 
 // User-provided API key (set from config, kept in memory only)
 let _userApiKey: string | null = null;
@@ -15,7 +15,10 @@ export function setUserApiKey(key: string | null): void {
 /** Build headers, injecting the user API key if set. */
 function _headers(extra?: Record<string, string>): Record<string, string> {
   const h: Record<string, string> = { 'Content-Type': 'application/json', ...extra };
-  if (_userApiKey) h['X-OpenRouter-Key'] = _userApiKey;
+  // FIX: Only inject the saved key if we didn't explicitly pass one in 'extra'
+  if (_userApiKey && !h['X-OpenRouter-Key']) {
+    h['X-OpenRouter-Key'] = _userApiKey;
+  }
   return h;
 }
 
@@ -46,14 +49,20 @@ const resultCache = new Map<string, Scene>();
 export const storyService = {
   
   /** Validates the API key by pinging OpenRouter via the backend */
-  async validateKey(key: string): Promise<boolean> {
+ async validateKey(key: string): Promise<boolean> {
     try {
       const response = await fetch(`${API_BASE}/story/validate-key`, {
         method: 'POST',
-        headers: _headers({ 'X-OpenRouter-Key': key }),
+        // .trim() prevents HTTP header syntax errors if you copy-pasted a space
+        headers: _headers({ 'X-OpenRouter-Key': key.trim() }), 
       });
+      
+      if (!response.ok) {
+        console.error("[validateKey] Server rejected key:", response.status, await response.text());
+      }
       return response.ok;
     } catch (e) {
+      console.error("[validateKey] Network or CORS error:", e);
       return false;
     }
   },
@@ -327,21 +336,4 @@ export const storyService = {
     return response.json();
   },
 
-  async debugStt(jobId: string, audiob64: string, storyText: string): Promise<void> {
-    try {
-      const resp = await fetch(`${API_BASE}/story/debug/stt`, {
-        method: 'POST',
-        headers: _headers(),
-        body: JSON.stringify({ job_id: jobId, audio_b64: audiob64, story_text: storyText }),
-      });
-      if (!resp.ok) {
-        return;
-      }
-      const data = await resp.json();
-      if (data.skipped) {
-        return;
-      }
-    } catch (e) {
-    }
-  },
 };

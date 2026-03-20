@@ -136,7 +136,8 @@ def generate_story_pdf(
         except Exception:
             pass
 
-    elements.append(PageBreak())
+        if i < len(scenes) - 1:
+            elements.append(PageBreak())
 
     # ── Story pages ───────────────────────────────────────────────────────────
     for i, scene in enumerate(scenes):

@@ -51,7 +51,18 @@ Both stores are in-memory (`session_store.py`). Sessions hold the growing conver
 ### v02 Advanced Features
 * **RAG & Cross-Session Memory**: Vectors are stored in a FAISS index (`rag_data/index.faiss`). Uploaded PDFs are chunked and embedded. A story summary is saved to the store at Step 8, giving the app long-term memory.
 * **Character Consistency & Avatars**: Base64 reference images are passed directly into the multimodal image generation prompt. If family members lack photos, `/story/avatar` generates a portrait.
-* **PDF Export**: Completed stories can be exported as A5 PDF booklets via `/story/export` (emojis are stripped automatically to prevent rendering crashes).
+* **PDF Export**: Completed stories can be exported as A5 PDF booklets via `/story/export` (emojis are stripped automatically to prevent rendering crashes). PDF generation runs in an async background thread with a StreamingResponse to avoid blocking the main event loop.
+
+---
+
+## Security Hardening
+
+To ensure the safety of user-provided Bring-Your-Own-Key (BYOK) credentials and app stability, the following security measures are implemented:
+
+* **Strict Content Security Policy (CSP):** The frontend strictly restricts network access. Even if a third-party dependency introduces an XSS vulnerability, the browser will physically block malicious scripts from exfiltrating the OpenRouter API key stored in IndexedDB.
+* **Stateless API Keys:** The backend does **not** store the user's API key in the session memory or database. The frontend transmits the key via a custom `X-OpenRouter-Key` HTTP header on every request, which the backend reads, applies via thread-safe `ContextVar`, and immediately forgets.
+* **Upfront Key Validation:** API keys are pinged against OpenRouter's `/auth/key` endpoint in real-time during configuration. Invalid keys are rejected before the user attempts to generate a story.
+* **Dynamic CORS:** Cross-Origin Resource Sharing is strictly locked to the dynamic frontend port defined in the environment variables, preventing unauthorized domains from interacting with the API.
 
 ---
 
@@ -63,6 +74,7 @@ bedtime-stories-capstone/
 │   ├── main.py                  # FastAPI app, endpoints
 │   ├── contracts.py             # Pydantic models (StoryState, StoryStatus, …)
 │   ├── session_store.py         # In-memory session + job stores
+│   ├── run.py                   # Dynamic entry point for Uvicorn
 │   ├── orchestrator/
 │   │   └── pipeline.py          # LangGraph nodes: text → media → assemble
 │   ├── pipelines/
@@ -82,7 +94,7 @@ bedtime-stories-capstone/
 │   └── types.ts                 # Shared TypeScript types
 ├── tests/
 │   └── test_pipeline_local.py   # Layered test suite (see Testing below)
-├── .env                         # API keys (not committed)
+├── .env                         # Single Source of Truth for ports & keys
 └── requirements.txt
 ```
 
@@ -120,16 +132,26 @@ npm install
 # or: bun install
 ```
 
-### 3. Configure environment variables
+### 3. Configure environment variables (Single Source of Truth)
 
-Create a `.env` file in the project root:
+Create a single `.env` file in the **project root** (this controls both the frontend and backend automatically):
 
 ```env
+# --- Ports ---
+FRONTEND_PORT=3001
+BACKEND_PORT=8000
+
+# --- API Keys ---
 OPENROUTER_API_KEY=sk-or-v1-...
 
 # Optional: write generated text/audio/image to backend/debug_output/ for inspection
 # DEBUG=true
+
+# Optional: Set to true to wipe IndexedDB on frontend startup (for testing)
+# VITE_DELETE_DB=false
 ```
+
+*(Note: In production deployments, you can supply `FRONTEND_URL` and `VITE_BACKEND_URL` to override the localhost ports with full HTTPS domains).*
 
 ---
 
@@ -140,10 +162,10 @@ Open two terminals from the project root.
 **Terminal 1 — backend:**
 
 ```bash
-python -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+python backend/run.py
 ```
 
-API is available at `http://localhost:8000`.
+The backend dynamically binds to the port specified in `.env` (default: `http://localhost:8000`).
 
 **Terminal 2 — frontend:**
 
@@ -153,7 +175,18 @@ npm run dev
 # or: bun dev
 ```
 
-Frontend is available at `http://localhost:5173`.
+The frontend dynamically binds to the port specified in `.env` (default: `http://localhost:3001`).
+
+---
+
+## Troubleshooting
+
+* **My settings/story history keep disappearing on refresh!**
+  Check your `.env` file. If `VITE_DELETE_DB=true` is set, the app is instructed to wipe its IndexedDB cache every time the page loads. Set it to `false` or remove it.
+* **I changed the `FRONTEND_PORT` and my data is gone!**
+  This is expected browser behavior. The Same-Origin Policy (SOP) isolates local databases by port. `localhost:3001` cannot see the data saved on `localhost:3000`. You will need to re-enter your configuration on the new port.
+* **Network Error / CORS Blocked during validation**
+  Ensure you are accessing the frontend via `http://localhost:PORT` and not `http://127.0.0.1:PORT`. If you changed the `BACKEND_PORT` in `.env`, ensure you restarted both the Python server and the Vite server so the new port is injected into the HTML CSP rules.
 
 ---
 

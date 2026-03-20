@@ -1,7 +1,7 @@
 import io
 import os
 import base64
-import httpx
+import requests
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, UploadFile, File
@@ -71,11 +71,15 @@ async def lifespan(app: FastAPI):
     _protagonist_image_b64 = _load_protagonist_image()
     yield
 
+FRONTEND_URL = os.getenv(
+    "FRONTEND_URL", 
+    f"http://localhost:{os.getenv('FRONTEND_PORT', '3000')}"
+)
 app = FastAPI(title="Story Weaver API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # NOTE: Update to specific domain for production
+    allow_origins=[FRONTEND_URL], # NOTE: Update to specific domain for production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -178,19 +182,26 @@ async def root():
 @app.post("/story/validate-key")
 async def validate_key(req: Request):
     """Lightweight check to ensure API key works before saving in frontend state."""
-    user_api_key = req.headers.get("x-openrouter-key")
+    # ADD .strip() right here!
+    user_api_key = req.headers.get("x-openrouter-key", "").strip()
     if not user_api_key:
         raise HTTPException(status_code=400, detail="No API Key provided")
     
-    async with httpx.AsyncClient() as client:
-        res = await client.get(
+    def _check_key():
+        return requests.get(
             "https://openrouter.ai/api/v1/auth/key", 
             headers={"Authorization": f"Bearer {user_api_key}"}
         )
+    
+    try:
+        res = await asyncio.to_thread(_check_key)
         if res.status_code == 200:
             return {"valid": True}
         else:
             raise HTTPException(status_code=401, detail="Invalid API Key")
+    except Exception as e:
+        print(f"[API] Key validation network error: {e}")
+        raise HTTPException(status_code=500, detail="Could not connect to OpenRouter")
 
 @app.post("/story/start")
 async def story_start(config: ChildConfig, background_tasks: BackgroundTasks, req: Request):
@@ -431,86 +442,6 @@ async def get_result(id: str):
         raise HTTPException(status_code=400, detail="Result not ready")
 
     return job.result
-
-
-# ---------------------------------------------------------------------------
-# Debug: STT transcription endpoint (temporary diagnostic)
-# ---------------------------------------------------------------------------
-
-class SttRequest(_BaseModel):
-    audio_b64: str      # raw base64 WAV (no data-URI prefix)
-    job_id: str = ""
-    story_text: str = ""
-
-
-@app.post("/story/debug/stt")
-async def debug_stt(req: SttRequest):
-    """
-    Transcribe the given WAV audio (base64) with Whisper and compare to story_text.
-    """
-    try:
-        wav_bytes = base64.b64decode(req.audio_b64)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Bad base64: {e}")
-
-    from openai import AsyncOpenAI
-    from dotenv import load_dotenv
-    load_dotenv()
-
-    # OpenRouter does NOT proxy Whisper (405). Call OpenAI directly.
-    api_key = os.getenv("OPENAI_API_KEY", "")
-    if not api_key:
-        print(f"[debug/stt] OPENAI_API_KEY not set — STT diagnostic skipped for job={req.job_id}")
-        return {
-            "job_id": req.job_id,
-            "transcript": "",
-            "story_text_preview": req.story_text[:300],
-            "word_overlap_pct": -1,
-            "match": None,
-            "skipped": True,
-            "reason": "OPENAI_API_KEY not configured",
-        }
-    client = AsyncOpenAI(api_key=api_key)
-
-    audio_file = io.BytesIO(wav_bytes)
-    audio_file.name = "narration.wav"
-
-    try:
-        result = await client.audio.transcriptions.create(
-            model="whisper-1",
-            file=audio_file,
-        )
-        transcript = result.text.strip()
-    except Exception as e:
-        print(f"[debug/stt] Whisper failed: {e}")
-        raise HTTPException(status_code=500, detail=f"STT failed: {e}")
-
-    # Word-overlap metric (jaccard of word sets, case-insensitive)
-    import re
-    def _words(t: str) -> set:
-        return set(re.sub(r"[^a-z0-9\s]", "", t.lower()).split())
-
-    story_words = _words(req.story_text)
-    audio_words = _words(transcript)
-    if story_words or audio_words:
-        overlap = len(story_words & audio_words) / len(story_words | audio_words)
-    else:
-        overlap = 1.0
-
-    print(
-        f"\n[debug/stt] job={req.job_id}\n"
-        f"  TRANSCRIPT : {transcript[:300]!r}\n"
-        f"  STORY_TEXT : {req.story_text[:300]!r}\n"
-        f"  WORD_OVERLAP: {overlap:.0%}\n"
-    )
-
-    return {
-        "job_id": req.job_id,
-        "transcript": transcript,
-        "story_text_preview": req.story_text[:300],
-        "word_overlap_pct": round(overlap * 100, 1),
-        "match": overlap > 0.4,
-    }
 
 
 # ---------------------------------------------------------------------------
