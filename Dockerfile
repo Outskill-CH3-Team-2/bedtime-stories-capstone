@@ -28,6 +28,11 @@ COPY --from=frontend-build /app/frontend/dist /app/static
 # Copy public assets (images, videos) that aren't bundled by Vite
 COPY frontend/public/ /app/static/
 
+# Download large assets at build time (baked into image, no runtime GDrive dependency)
+RUN python -c "\
+from utils.download_assets import download_if_missing; \
+download_if_missing('/app/static/binaries.properties', '/app/static')"
+
 # Serve frontend static files from FastAPI
 ENV STATIC_DIR=/app/static
 
