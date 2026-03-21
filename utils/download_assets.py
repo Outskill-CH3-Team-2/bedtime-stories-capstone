@@ -16,10 +16,26 @@ def get_direct_url(sharing_url: str) -> str | None:
     return f"{GDRIVE_DOWNLOAD_URL}?id={file_id}&export=download&confirm=t"
 
 
-def download_file(url: str, dest_path: str) -> bool:
+def download_file(url: str, dest_path: str, max_retries: int = 2) -> bool:
     """Downloads a file from *url* and writes it to *dest_path*. Returns True on success."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            ok = _download_once(url, dest_path)
+            if ok:
+                return True
+            if attempt < max_retries:
+                print(f"  retry {attempt}/{max_retries - 1}...")
+        except Exception as exc:
+            print(f"  download error (attempt {attempt}): {exc}")
+            if os.path.exists(dest_path):
+                os.remove(dest_path)
+    return False
+
+
+def _download_once(url: str, dest_path: str) -> bool:
+    """Single download attempt."""
     session = requests.Session()
-    response = session.get(url, stream=True, timeout=120)
+    response = session.get(url, stream=True, timeout=(30, 300))
 
     # GDrive may redirect to a confirmation page for large files – follow it.
     if response.status_code == 200 and "text/html" in response.headers.get("Content-Type", ""):
@@ -28,7 +44,10 @@ def download_file(url: str, dest_path: str) -> bool:
         confirm_match = re.search(r'href="(/download\?[^"]+)"', content)
         if confirm_match:
             confirmed_url = "https://drive.usercontent.google.com" + confirm_match.group(1).replace("&amp;", "&")
-            response = session.get(confirmed_url, stream=True, timeout=120)
+            response = session.get(confirmed_url, stream=True, timeout=(30, 300))
+        else:
+            print(f"  WARNING: got HTML response but no confirmation link found")
+            return False
 
     if response.status_code != 200:
         print(f"  Failed (HTTP {response.status_code})")

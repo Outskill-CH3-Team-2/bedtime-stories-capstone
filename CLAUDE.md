@@ -6,41 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Dream Weaver** — A personalized bedtime story generator for children ages 3-8. A FastAPI backend orchestrates a LangGraph pipeline that generates narrative text, illustrations, and narration audio, all routed through OpenRouter as a single AI gateway.
 
-## DEADLINE: 18 MARZO 2026 (corso Outskill AI Engineering)
+## Status: CONSEGNATO ✅ (18 marzo 2026 — Outskill AI Engineering)
 
-### Stato attuale (18 marzo 2026)
+App funzionante end-to-end. Progetto consegnato entro deadline.
 
-App funzionante end-to-end, testata manualmente e via API E2E. Branch `feature/final-polish` con PR #40 aperta verso main.
-
-**Completati:**
-- [x] PR #33: bug critici frontend (config screen, story_idea, button sync)
-- [x] PR #34: prompt aggiornato per moral message
-- [x] PR #38: side characters + config screen redesign + injection protection
-- [x] Bug fix: TTS 402 short-circuit (no retry on insufficient balance)
-- [x] Bug fix: debounce duplicate story starts (ref-based guard)
-- [x] Bug fix: companion roles rispettati (Cat, Uncle, ecc.)
-- [x] Bug fix: scelte bloccate fino a fine narrazione audio
-- [x] Bug fix: duplicate story_system_prompt in YAML rimosso
-- [x] Bug fix: image prompt migliorato per character consistency
-- [x] Bug fix: image max_tokens capped at 4096 (was defaulting to 32768 → 402 errors)
-- [x] Bug fix: safety max_tokens reduced 5000→500 (only returns small JSON)
-- [x] Bug fix: scene 0 history committed before prefiring scene 1 (fixes LLM restarting story)
-- [x] Bug fix: choices unlock when jobs fired, not when results cached (eliminates dead time)
-- [x] RAG integration: FAISS + OpenRouter embeddings per story memory
-- [x] PDF export: booklet A5 con illustrazioni e testo
-- [x] Story memory: auto-save per espandere universo del bambino
-- [x] Mobile UI: landscape hint, responsive adjustments
-- [x] Deployment: Dockerfile, render.yaml, SPA serving
-- [x] Presentation: course template filled, team photos (Tamas + Alessandro)
-- [x] 34/34 test passing
-- [x] E2E API test: 2-scene story verified (text + audio + image + choices)
-- [x] PR #40 opened (feature/final-polish → main)
-
-**Da fare:**
-- [ ] Merge PR #40 to main
-- [ ] Deploy online (Render/Railway)
-- [ ] Finalize presentation in Google Slides (team fixing colors/alignment)
-- [ ] Record demo video
+**Post-delivery fixes (pushed to main):**
+- [x] Bug fix: intro video not loading in Docker deployment — `_PUBLIC_DIR` now resolves to `STATIC_DIR` in production so `binaries.properties` download targets the correct directory
+- [x] Bug fix: intro video not playing on Chrome — added `muted` attribute to `<video>` for Chrome autoplay policy compliance
+- [x] Improvement: asset download validation — logs file size/content-type, deletes corrupt downloads (< 10KB media files)
 
 ## Commands
 
@@ -169,4 +142,4 @@ docker run -e OPENROUTER_API_KEY=sk-... -p 8000:8000 dream-weaver
 Or deploy via Render using `render.yaml` (set `OPENROUTER_API_KEY` env var in dashboard).
 
 # currentDate
-Today's date is 2026-03-18.
+Today's date is 2026-03-20.

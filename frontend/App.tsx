@@ -102,6 +102,7 @@ interface IntroScreenProps {
 const IntroScreen: React.FC<IntroScreenProps> = ({ storyReady, onContinue }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playing, setPlaying] = useState(true);
+  const [videoError, setVideoError] = useState(false);
 
   // Stop video immediately when component unmounts to free up audio context
   useEffect(() => {
@@ -113,18 +114,30 @@ const IntroScreen: React.FC<IntroScreenProps> = ({ storyReady, onContinue }) => 
     };
   }, []);
 
+  // Handle autoPlay promise rejection (Chrome blocks play if source not loaded)
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || videoError) return;
+    const playPromise = v.play();
+    if (playPromise) {
+      playPromise.catch(() => {
+        setPlaying(false);
+      });
+    }
+  }, [videoError]);
+
   const togglePlay = () => {
     const v = videoRef.current;
-    if (!v) return;
-    if (v.paused) { v.play(); setPlaying(true); }
+    if (!v || videoError) return;
+    if (v.paused) { v.play().catch(() => {}); setPlaying(true); }
     else { v.pause(); setPlaying(false); }
   };
 
   const restart = () => {
     const v = videoRef.current;
-    if (!v) return;
+    if (!v || videoError) return;
     v.currentTime = 0;
-    v.play();
+    v.play().catch(() => {});
     setPlaying(true);
   };
 
@@ -132,17 +145,30 @@ const IntroScreen: React.FC<IntroScreenProps> = ({ storyReady, onContinue }) => 
     <div className="relative z-10 w-full max-w-3xl animate-fadeIn flex flex-col items-center px-4 gap-5">
       <div className="w-full book-shadow" style={{ border: '10px solid #2c1810', borderRadius: 2, overflow: 'hidden', background: '#0a0705' }}>
         <div style={{ position: 'relative', width: '100%', aspectRatio: '16/9' }}>
-          <video
-            ref={videoRef}
-            src="/BedtimeStoryIntro.mp4"
-            autoPlay
-            muted
-            loop
-            playsInline
-            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-          />
+          {videoError ? (
+            <div style={{
+              width: '100%', height: '100%', display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center', background: '#0a0705',
+              position: 'absolute', inset: 0,
+            }}>
+              <div className="spin-ring" style={{ width: 48, height: 48, marginBottom: 18 }} />
+              <span className="font-cinzel" style={{ color: '#f2e8cf80', fontSize: 13, letterSpacing: '0.25em', textTransform: 'uppercase' }}>
+                Weaving your dream…
+              </span>
+            </div>
+          ) : (
+            <video
+              ref={videoRef}
+              src="/BedtimeStoryIntro.mp4"
+              muted
+              loop
+              playsInline
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+              onPlay={() => setPlaying(true)}
+              onPause={() => setPlaying(false)}
+              onError={() => { console.warn('[IntroScreen] Video failed to load — showing fallback'); setVideoError(true); }}
+            />
+          )}
           <div style={{
             position: 'absolute', inset: 0, pointerEvents: 'none',
             background: 'radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.55) 100%)',
@@ -170,19 +196,23 @@ const IntroScreen: React.FC<IntroScreenProps> = ({ storyReady, onContinue }) => 
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, width: '100%', maxWidth: 480 }}>
-        <button onClick={togglePlay} className="ink-btn-dark" title={playing ? 'Pause' : 'Play'}
-          style={{ width: 44, height: 44, borderRadius: '50%', flexShrink: 0 }}>
-          {playing
-            ? <svg height="18" width="18" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
-            : <svg height="18" width="18" fill="currentColor" viewBox="0 0 24 24" style={{ marginLeft: 2 }}><path d="M8 5v14l11-7z" /></svg>
-          }
-        </button>
-        <button onClick={restart} className="ink-btn-dark" title="Restart video"
-          style={{ width: 44, height: 44, borderRadius: '50%', flexShrink: 0 }}>
-          <svg height="18" width="18" fill="currentColor" viewBox="0 0 24 24">
-            <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
-          </svg>
-        </button>
+        {!videoError && (
+          <>
+            <button onClick={togglePlay} className="ink-btn-dark" title={playing ? 'Pause' : 'Play'}
+              style={{ width: 44, height: 44, borderRadius: '50%', flexShrink: 0 }}>
+              {playing
+                ? <svg height="18" width="18" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" /></svg>
+                : <svg height="18" width="18" fill="currentColor" viewBox="0 0 24 24" style={{ marginLeft: 2 }}><path d="M8 5v14l11-7z" /></svg>
+              }
+            </button>
+            <button onClick={restart} className="ink-btn-dark" title="Restart video"
+              style={{ width: 44, height: 44, borderRadius: '50%', flexShrink: 0 }}>
+              <svg height="18" width="18" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z" />
+              </svg>
+            </button>
+          </>
+        )}
         <button
           onClick={onContinue}
           disabled={!storyReady}

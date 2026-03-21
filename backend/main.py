@@ -64,8 +64,17 @@ async def lifespan(app: FastAPI):
     global _protagonist_image_b64
     # 1. Download any missing public-folder assets (intro video, child photo, etc.)
     if os.path.exists(_PUBLIC_PROPS):
-        print("[startup] Checking public assets...")
+        print(f"[startup] Checking public assets (dir={_PUBLIC_DIR})...")
         download_if_missing(_PUBLIC_PROPS, _PUBLIC_DIR)
+        # Log which assets are present after download
+        for name in ("BedtimeStoryIntro.mp4", "child_photo_01.png"):
+            p = os.path.join(_PUBLIC_DIR, name)
+            if os.path.exists(p):
+                print(f"[startup]   ✓ {name} ({os.path.getsize(p):,} bytes)")
+            else:
+                print(f"[startup]   ✗ {name} MISSING")
+    else:
+        print(f"[startup] No binaries.properties found at {_PUBLIC_PROPS}")
     # 2. Load protagonist reference image into memory once
     _protagonist_image_b64 = _load_protagonist_image()
     yield
@@ -662,11 +671,20 @@ _STATIC_DIR = os.getenv("STATIC_DIR", "")
 if _STATIC_DIR and os.path.isdir(_STATIC_DIR):
     from fastapi.responses import FileResponse
 
+    # File extensions that should never fall through to index.html
+    _ASSET_EXTS = {".mp4", ".mp3", ".wav", ".ogg", ".webm", ".png", ".jpg", ".jpeg",
+                   ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".eot",
+                   ".json", ".xml", ".map", ".css", ".js"}
+
     @app.get("/{full_path:path}", include_in_schema=False)
     async def _serve_spa(full_path: str):
         file_path = os.path.join(_STATIC_DIR, full_path)
         if full_path and os.path.isfile(file_path):
             return FileResponse(file_path)
+        # Don't serve index.html for missing static assets — return 404 instead
+        ext = os.path.splitext(full_path)[1].lower()
+        if ext in _ASSET_EXTS:
+            raise HTTPException(status_code=404, detail=f"Asset not found: {full_path}")
         index = os.path.join(_STATIC_DIR, "index.html")
         if os.path.isfile(index):
             return FileResponse(index)
