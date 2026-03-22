@@ -1,3 +1,24 @@
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+</div>
+
+# Run and deploy your AI Studio app
+
+This contains everything you need to run your app locally.
+
+View your app in AI Studio: https://ai.studio/apps/drive/1jNjv3LD1j_ytej-bLyrURB94Iz9ojdLh
+
+## Run Locally
+
+**Prerequisites:** Node.js
+
+
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`
+
 # Interactive Bedtime Stories
 
 An AI-powered interactive bedtime story app for children. A child picks a story idea, and the app generates a personalised story scene-by-scene — each scene has narrated audio, an illustration, and two choices that drive the next scene.
@@ -228,3 +249,81 @@ backend/debug_output/
 ```
 
 Files are named `{timestamp}_{job_id}_step{N}.{ext}`.
+
+---
+
+## Deployment (VPS / Docker)
+
+This guide outlines how to deploy the application to a production VPS (like Hostinger, DigitalOcean, etc.) using Docker, Nginx as a reverse proxy, and Certbot for secure HTTPS.
+
+### 1. Prerequisites
+* A Linux VPS with Docker installed.
+* A registered domain name.
+* An `A` Record in your domain's DNS settings pointing `@` to your VPS's IP address.
+
+### 2. Build the Docker Image
+Because the React frontend (`Vite`) bakes environment variables into the static HTML and JS files at build time, you must pass your public domain URL as a build argument.
+
+From the root project directory (where the `Dockerfile` is located):
+```bash
+docker build --build-arg VITE_BACKEND_URL=[https://your-domain.com](https://your-domain.com) -t bedtime-app .
+```
+
+### 3. Run the Container
+The app uses a **"Bring Your Own Key" (BYOK)** model. You do not need to provide a server-wide OpenRouter API key. Users enter their keys in the settings UI.
+
+Run the container, mapping port `8000` to the host, and setting the `FRONTEND_URL` for FastAPI's strict CORS policy:
+```bash
+docker run -d -p 8000:8000 \
+  -e FRONTEND_URL=[https://your-domain.com](https://your-domain.com) \
+  bedtime-app
+```
+
+### 4. Setup Nginx Reverse Proxy
+To serve the app on standard web ports and secure it with SSL, configure Nginx to proxy traffic from Port 80 to Port 8000.
+
+Install Nginx:
+```bash
+sudo apt update
+sudo apt install nginx -y
+```
+
+Create a new configuration file (`/etc/nginx/sites-available/bedtime-stories`):
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com [www.your-domain.com](https://www.your-domain.com);
+
+    location / {
+        proxy_pass [http://127.0.0.1:8000](http://127.0.0.1:8000);
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Enable the site and restart Nginx:
+```bash
+sudo ln -s /etc/nginx/sites-available/bedtime-stories /etc/nginx/sites-enabled/
+sudo systemctl restart nginx
+```
+*(Note: If Nginx fails to start due to port conflicts, ensure Apache or leftover Docker containers aren't hogging Port 80 by running `sudo ss -tulpn | grep :80`)*
+
+### 5. Secure with HTTPS (Certbot)
+Install Certbot and its Nginx plugin to provision a free Let's Encrypt SSL certificate:
+```bash
+sudo apt install certbot python3-certbot-nginx -y
+sudo certbot --nginx -d your-domain.com -d [www.your-domain.com](https://www.your-domain.com)
+```
+When prompted by Certbot, **always choose to redirect** HTTP traffic to HTTPS. 
+
+### 6. Firewall Configuration (UFW)
+To prevent users from bypassing Nginx and hitting your app directly on Port 8000, ensure your firewall is configured to only allow standard web traffic:
+```bash
+sudo ufw allow ssh
+sudo ufw allow http
+sudo ufw allow https
+sudo ufw enable
+```
