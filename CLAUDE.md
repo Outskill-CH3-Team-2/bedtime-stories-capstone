@@ -14,6 +14,10 @@ App funzionante end-to-end. Progetto consegnato entro deadline.
 - [x] Bug fix: intro video not loading in Docker deployment — `_PUBLIC_DIR` now resolves to `STATIC_DIR` in production so `binaries.properties` download targets the correct directory
 - [x] Bug fix: intro video not playing on Chrome — added `muted` attribute to `<video>` for Chrome autoplay policy compliance
 - [x] Improvement: asset download validation — logs file size/content-type, deletes corrupt downloads (< 10KB media files)
+- [x] Bug fix: SPA catch-all was serving `index.html` for missing media files — now returns proper 404 for asset extensions
+- [x] Improvement: intro video uses `<source>` fallback chain (local → Google Drive → spinner UI)
+- [x] Improvement: asset downloader adds retry logic, better timeouts, and startup diagnostics
+- [x] Improvement: Docker build downloads assets at build time via `RUN` step
 
 ## Commands
 
@@ -141,5 +145,14 @@ docker run -e OPENROUTER_API_KEY=sk-... -p 8000:8000 dream-weaver
 
 Or deploy via Render using `render.yaml` (set `OPENROUTER_API_KEY` env var in dashboard).
 
+### Intro Video Asset
+
+The intro video (`BedtimeStoryIntro.mp4`, 175MB) is too large for git. It's handled via a three-tier fallback:
+1. **Docker build**: `Dockerfile` runs `download_if_missing` at build time to bake it into the image
+2. **Runtime startup**: `lifespan()` re-checks and downloads if missing (with retry logic)
+3. **Frontend fallback**: `<source>` elements try local file first, then stream from Google Drive; if both fail, a spinner animation is shown
+
+The Google Drive source URL and local filename are configured in `frontend/public/binaries.properties`.
+
 # currentDate
-Today's date is 2026-03-20.
+Today's date is 2026-03-22.
