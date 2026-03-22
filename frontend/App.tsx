@@ -159,15 +159,17 @@ const IntroScreen: React.FC<IntroScreenProps> = ({ storyReady, onContinue }) => 
           ) : (
             <video
               ref={videoRef}
-              src="/BedtimeStoryIntro.mp4"
               muted
               loop
               playsInline
               style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
               onPlay={() => setPlaying(true)}
               onPause={() => setPlaying(false)}
-              onError={() => { console.warn('[IntroScreen] Video failed to load — showing fallback'); setVideoError(true); }}
-            />
+              onError={() => { console.warn('[IntroScreen] All video sources failed — showing fallback'); setVideoError(true); }}
+            >
+              <source src="/BedtimeStoryIntro.mp4" type="video/mp4" />
+              <source src="https://drive.usercontent.google.com/download?id=10pIMEgafXC7YQxspTRYq7gSaEq2au8jO&export=download&confirm=t" type="video/mp4" />
+            </video>
           )}
           <div style={{
             position: 'absolute', inset: 0, pointerEvents: 'none',
