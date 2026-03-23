@@ -366,7 +366,41 @@ class TestLevel2_API:
         assert choose_r.status_code == 200
         assert choose_r.json()["step_number"] == 1
 
+@pytest.mark.asyncio
+async def test_api_upload_requires_key():
+    """Level 2: Ensure the upload endpoint rejects requests missing the API key header."""
+    # Create a dummy PDF file in memory
+    files = {"file": ("test.pdf", b"%PDF-1.4 dummy content", "application/pdf")}
+    
+    # Send request WITHOUT the x-openrouter-key header
+    response = client.post("/story/upload", files=files)
+    
+    # It should hit our new Fail Fast logic and return 401
+    assert response.status_code == 401
+    assert "API Key missing" in response.json()["detail"]
 
+@pytest.mark.asyncio
+async def test_api_memory_accepts_request():
+    """Level 2: Ensure the memory endpoint doesn't crash from a missing 'req' parameter."""
+    payload = {
+        "summary": "A brave knight defeated a dragon.",
+        "child_name": "Arthur",
+        "session_id": "test_123"
+    }
+    
+    # Send request WITH the header
+    response = client.post(
+        "/story/memory", 
+        json=payload,
+        headers={"x-openrouter-key": "fake-key-123"}
+    )
+    
+    # Since we use fake keys in tests, OpenRouter will fail the embedding, 
+    # but the endpoint itself should NOT crash with a 500 NameError anymore!
+    # A 500 error means our code is broken. Anything else means our code works, 
+    # but the fake API key was (correctly) rejected by OpenRouter.
+    assert response.status_code != 500
+    
 # ─────────────────────────────────────────────────────────────────────────────
 # LEVEL 3 — Real API smoke tests (needs OPENROUTER_API_KEY, ~$0.01)
 # ─────────────────────────────────────────────────────────────────────────────

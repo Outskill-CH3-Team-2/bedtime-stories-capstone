@@ -439,6 +439,72 @@ const ConfigurationPage: React.FC<ConfigurationPageProps> = ({ config: initialCo
             </div>
           </section>
 
+          <section>
+            <h3 className="font-cinzel text-lg mb-4 text-[#3d1f0d] border-b border-[#8b4513]/10 pb-1">Companions & Family</h3>
+            <p className="text-xs text-[#2c1810]/70 mb-4 italic">Each card has a name, age, favourite things, and an optional photo. Tap the avatar to upload one.</p>
+            
+            <div className="space-y-6">
+              <CharacterCarousel
+                label="Companions (pets, friends...)"
+                members={config.companions}
+                onChange={v => setConfig(p => ({ ...p, companions: v }))}
+                addLabel="Add"
+                defaultRelation="Friend"
+              />
+              <CharacterCarousel
+                label="Siblings"
+                members={config.siblings}
+                onChange={v => setConfig(p => ({ ...p, siblings: v }))}
+                addLabel="Add Sibling"
+                defaultRelation="Sibling"
+              />
+              <CharacterCarousel
+                label="Parents"
+                members={config.parents}
+                onChange={v => setConfig(p => ({ ...p, parents: v }))}
+                addLabel="Add Parent"
+                defaultRelation="Parent"
+              />
+              <CharacterCarousel
+                label="Grandparents"
+                members={config.grandparents}
+                onChange={v => setConfig(p => ({ ...p, grandparents: v }))}
+                addLabel="Add"
+                defaultRelation="Grandparent"
+              />
+            </div>
+          </section>
+
+{/* ── Child Picture ────────────────────────────────────────────── */}
+          <section>
+            <h3 className="font-cinzel text-lg mb-2 text-[#3d1f0d] uppercase border-b border-[#8b4513]/10 pb-1">Child Picture (Optional)</h3>
+            <p className="text-xs text-[#2c1810]/80 mb-4 italic">
+              Upload a photo to keep the child's appearance consistent across all illustrations. This stays on your device.
+            </p>
+            <div className="flex items-center gap-4">
+              <label className="flex-1 cursor-pointer border border-[#8b4513] text-[#8b4513] text-center py-2.5 hover:bg-[#8b4513]/5 transition-colors">
+                <span className="font-cinzel text-sm uppercase tracking-widest">Select Picture</span>
+                <input type="file" accept="image/png,image/jpeg" className="hidden" onChange={handleImageUpload} />
+              </label>
+              
+              {previewUrl ? (
+                <div className="relative shrink-0">
+                  <img src={previewUrl} alt="Child profile" className="w-16 h-16 rounded-full object-cover border-2 border-[#8b4513] shadow-sm" />
+                  <button 
+                    type="button" 
+                    onClick={() => { setPreviewUrl(null); setConfig(p => ({ ...p, childPhoto: '' })); }}
+                    className="absolute -top-2 -right-2 bg-[#8b4513] text-[#fcf9f2] rounded-full w-5 h-5 flex items-center justify-center text-xs hover:bg-red-700 transition-colors"
+                    title="Remove photo"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <div className="w-16 h-16 shrink-0 rounded-full border-2 border-dashed border-[#c9a87c] bg-[#f5edd8]" />
+              )}
+            </div>
+          </section>
+
           {/* ── Knowledge Library (RAG) ─────────────────────────────────── */}
           <section className="bg-[#fcf9f2]/50 p-4 rounded-sm border border-[#d4c48a]/50">
             <h3 className="font-cinzel text-lg mb-2 text-[#3d1f0d]">Story Library</h3>
@@ -448,8 +514,15 @@ const ConfigurationPage: React.FC<ConfigurationPageProps> = ({ config: initialCo
                 <input type="file" accept=".pdf" className="hidden" onChange={async (e) => {
                   const file = e.target.files?.[0];
                   if (file) {
+                    const apiKey = config.openrouterApiKey;
+                    
+                    // 2. Stop if they haven't entered one yet
+                    if (!apiKey) {
+                      alert("Please enter your API Key in the settings below before uploading a document.");
+                      return;
+                    }
                     try {
-                      const res = await storyService.uploadDocument(file);
+                      const res = await storyService.uploadDocument(file, apiKey);
                       alert(`Indexed ${res.chunks_added} sections.`);
                       refreshLibrary();
                     } catch (err: any) { alert(`Failed: ${err.message}`); }

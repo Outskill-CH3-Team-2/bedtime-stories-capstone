@@ -287,7 +287,7 @@ const Book: React.FC<BookProps> = ({
             <img
               src={`data:image/png;base64,${scene.illustration_b64}`}
               alt="scene illustration"
-              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+              style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
             />
           ) : (
             <div style={{

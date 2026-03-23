@@ -286,6 +286,8 @@ async def generate(request: GenerateRequest, background_tasks: BackgroundTasks, 
     Unified generate endpoint for first chapter AND subsequent chapters.
     """
     user_api_key = req.headers.get("x-openrouter-key") if req else None
+    if user_api_key:
+        set_api_key_override(user_api_key)
 
     if not request.session_id:
         # ── First chapter ──────────────────────────────────────────────────
@@ -449,10 +451,14 @@ async def get_result(id: str):
 # ---------------------------------------------------------------------------
 
 @app.post("/story/upload")
-async def upload_document(file: UploadFile = File(...), source_type: str = "upload"):
+async def upload_document(request: Request, file: UploadFile = File(...), source_type: str = "upload"):
     """
     Upload a PDF document for RAG context.
     """
+    user_api_key = request.headers.get("x-openrouter-key")
+    if user_api_key:
+        set_api_key_override(user_api_key)
+        
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported.")
 
@@ -497,13 +503,17 @@ async def delete_document(filename: str):
 
 
 @app.post("/story/memory")
-async def save_story_memory(request: dict):
+async def save_story_memory(payload: dict, req: Request):
     """
     Save a completed story summary to RAG for cross-session memory.
     """
-    summary = request.get("summary", "")
-    child_name = request.get("child_name", "unknown")
-    session_id = request.get("session_id", "")
+    user_api_key = req.headers.get("x-openrouter-key")
+    if user_api_key:
+        set_api_key_override(user_api_key)
+        
+    summary = payload.get("summary", "")
+    child_name = payload.get("child_name", "unknown")
+    session_id = payload.get("session_id", "")
 
     if not summary.strip():
         raise HTTPException(status_code=400, detail="Summary is required.")

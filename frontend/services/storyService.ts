@@ -315,25 +315,31 @@ export const storyService = {
     });
   },
 
-  async uploadDocument(file: File, sourceType: string = 'upload'): Promise<any> {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('source_type', sourceType);
-    const response = await fetch(`${API_BASE}/story/upload?source_type=${sourceType}`, {
-      method: 'POST',
-      body: formData,
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Upload failed: ${response.status} ${text}`);
-    }
-    return response.json();
-  },
-
+ 
   async getLibrary(): Promise<any> {
     const response = await fetch(`${API_BASE}/story/library`);
     if (!response.ok) throw new Error('Failed to fetch library');
     return response.json();
   },
 
+async uploadDocument(file: File, apiKey: string, sourceType: string = 'upload') {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('source_type', sourceType);
+
+    const response = await fetch(`${API_BASE}/story/upload`, {
+      method: 'POST',
+      headers: {
+        'X-OpenRouter-Key': apiKey
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || 'Upload failed');
+    }
+    return response.json();
+  }
+      
 };
