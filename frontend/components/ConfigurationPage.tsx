@@ -325,6 +325,7 @@ const ConfigurationPage: React.FC<ConfigurationPageProps> = ({ config: initialCo
   const [isValidating, setIsValidating] = useState(false);
   const [keyError, setKeyError] = useState('');
   const [libraryFiles, setLibraryFiles] = useState<{name: string, chunks: number, source: string}[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
 
   const refreshLibrary = async () => {
     try {
@@ -509,26 +510,49 @@ const ConfigurationPage: React.FC<ConfigurationPageProps> = ({ config: initialCo
           <section className="bg-[#fcf9f2]/50 p-4 rounded-sm border border-[#d4c48a]/50">
             <h3 className="font-cinzel text-lg mb-2 text-[#3d1f0d]">Story Library</h3>
             <div className="flex flex-col gap-3 mb-6">
-              <label className="cursor-pointer inline-flex items-center justify-center px-4 py-2 border border-[#8b4513]/40 rounded-sm text-xs font-cinzel tracking-widest uppercase hover:bg-[#8b4513]/5 transition-all w-full text-center">
-                Upload Style Reference (PDF)
-                <input type="file" accept=".pdf" className="hidden" onChange={async (e) => {
-                  const file = e.target.files?.[0];
-                  if (file) {
-                    const apiKey = config.openrouterApiKey;
-                    
-                    // 2. Stop if they haven't entered one yet
-                    if (!apiKey) {
-                      alert("Please enter your API Key in the settings below before uploading a document.");
-                      return;
+              {isUploading ? (
+                <div className="w-full flex flex-col items-center justify-center p-3 border border-[#d4c48a]/50 rounded-sm bg-[#f0e8d4]/50">
+                  <div className="w-full bg-[#f5edd8] rounded-full h-1.5 mb-2 overflow-hidden border border-[#d4c48a]/30">
+                    <div className="bg-[#8b4513] h-1.5 rounded-full animate-pulse opacity-80" style={{ width: '100%' }}></div>
+                  </div>
+                  <p className="text-center text-xs italic font-serif text-[#8b4513]">Uploading and processing document...</p>
+                </div>
+              ) : (
+                <label className="cursor-pointer inline-flex items-center justify-center px-4 py-2 border border-[#8b4513]/40 rounded-sm text-xs font-cinzel tracking-widest uppercase hover:bg-[#8b4513]/5 transition-all w-full text-center">
+                  Upload Style Reference (PDF)
+                  <input type="file" accept=".pdf" className="hidden" onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const apiKey = config.openrouterApiKey;
+                      
+                      // 2. Stop if they haven't entered one yet
+                      if (!apiKey) {
+                        alert("Please enter your API Key in the settings below before uploading a document.");
+                        e.target.value = '';
+                        return;
+                      }
+
+                      if (file.size > 50 * 1024 * 1024) {
+                        alert("File size exceeds the 50MB limit.");
+                        e.target.value = '';
+                        return;
+                      }
+
+                      try {
+                        setIsUploading(true);
+                        const res = await storyService.uploadDocument(file, apiKey);
+                        alert(`Indexed ${res.chunks_added} sections.`);
+                        refreshLibrary();
+                      } catch (err: any) { 
+                        alert(`Failed: ${err.message}`); 
+                      } finally {
+                        setIsUploading(false);
+                        if (e.target) e.target.value = '';
+                      }
                     }
-                    try {
-                      const res = await storyService.uploadDocument(file, apiKey);
-                      alert(`Indexed ${res.chunks_added} sections.`);
-                      refreshLibrary();
-                    } catch (err: any) { alert(`Failed: ${err.message}`); }
-                  }
-                }} />
-              </label>
+                  }} />
+                </label>
+              )}
             </div>
             <div className="space-y-2 max-h-48 overflow-y-auto pr-2 custom-scrollbar">
               <h4 className="text-[10px] font-cinzel tracking-widest uppercase opacity-50 mb-2">Indexed Documents</h4>
@@ -556,9 +580,51 @@ const ConfigurationPage: React.FC<ConfigurationPageProps> = ({ config: initialCo
           </section>
 
           <section className="bg-[#fcf9f2]/50 p-4 border border-[#d4c48a]/50">
-            <h3 className="font-cinzel text-lg mb-2 text-[#3d1f0d]">API Settings</h3>
+            <h3 className="font-cinzel text-lg mb-2 text-[#3d1f0d] uppercase">API Settings (Optional)</h3>
+            <p className="text-xs text-[#2c1810]/80 mb-4 italic">
+              This app uses <a href="https://openrouter.ai/" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">OpenRouter</a> to generate stories. You can provide your own API key to use your own credits instead of the shared demo key.
+            </p>
+            
+            <label className="block text-sm font-semibold mb-2">OpenRouter API Key</label>
             <input type="password" name="openrouterApiKey" value={config.openrouterApiKey || ''} onChange={e => { setConfig(p => ({ ...p, openrouterApiKey: e.target.value })); setKeyError(''); }} placeholder="sk-or-v1-..." className="w-full bg-[#fcf9f2] border border-[#d4c48a] p-2.5 outline-none font-mono text-sm" />
+            
+            <p className="text-xs italic opacity-60 mt-2 mb-4">
+              Your key stays in your browser and is sent only to the story server. Never shared or stored server-side.
+            </p>
             {keyError && <p className="text-xs text-[#c0392b] mt-1 font-semibold">{keyError}</p>}
+
+            {/* Cost estimate table */}
+            <div className="border border-[#d4c48a]/60 rounded-sm overflow-hidden">
+              <div className="bg-[#f0e8d4] px-3 py-1.5 border-b border-[#d4c48a]/60">
+                <span className="font-cinzel text-xs font-bold tracking-wide uppercase text-[#3d1f0d]">Estimated Cost per Story</span>
+              </div>
+              <div className="px-3 py-2 text-xs font-serif space-y-1">
+                <div className="flex justify-between">
+                  <span className="opacity-70">Text generation (GPT-4o)</span>
+                  <span className="font-semibold">~$0.02 / scene</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="opacity-70">Safety check (GPT-4o-mini)</span>
+                  <span className="font-semibold">~$0.001 / scene</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="opacity-70">Illustration (Gemini Flash)</span>
+                  <span className="font-semibold">~$0.04 / scene</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="opacity-70">Narration audio (GPT-4o Audio)</span>
+                  <span className="font-semibold">~$0.05 / scene</span>
+                </div>
+                <div className="flex justify-between border-t border-[#d4c48a]/40 pt-1 mt-1">
+                  <span className="opacity-70">Per scene total</span>
+                  <span className="font-semibold">~$0.10 &ndash; $0.15</span>
+                </div>
+                <div className="flex justify-between font-bold text-[#3d1f0d]">
+                  <span>Full story (6&ndash;8 scenes)</span>
+                  <span>~$1.00 &ndash; $2.00</span>
+                </div>
+              </div>
+            </div>
           </section>
 
           <section className="border-2 border-[#8b4513]/40 p-4 bg-[#fffbf2]">
