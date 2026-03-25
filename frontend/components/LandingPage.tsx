@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 
 // --- Animated SVG Doodle Background Component ---
 const DoodlesBackground: React.FC = () => {
@@ -47,6 +47,7 @@ interface LandingPageProps {
 
 const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [showLegal, setShowLegal] = useState(false);
 
   useEffect(() => {
     if (videoRef.current) {
@@ -251,11 +252,51 @@ const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
         </section>
 
         {/* Footer */}
-        <footer className="mt-20 text-center opacity-70 font-serif text-sm">
-          <p>Powered by OpenRouter API & LangGraph</p>
+        <footer className="mt-20 w-full flex flex-col items-center opacity-80 font-serif text-[12px] md:text-sm pb-8">
+          <p className="mb-2">Powered by OpenRouter API & LangGraph</p>
+          <div className="flex flex-col sm:flex-row gap-4 sm:gap-12 mt-4 pt-6 border-t border-[#8b4513]/20 w-full max-w-4xl justify-center items-center text-[#8b4513] font-cinzel tracking-widest uppercase">
+            <span>Created as a Capstone Project for <a href="https://www.outskill.com/6-month-ai-engineering" target="_blank" rel="noreferrer" className="font-bold underline cursor-pointer hover:text-[#a0521a]">Outskill</a></span>
+            <button onClick={() => setShowLegal(true)} className="hover:underline font-bold cursor-pointer">Impressum & Legal</button>
+          </div>
+          <p className="mt-4 italic opacity-80 text-[11px] font-sans">A special thanks to the Outskill team for the excellent training.</p>
         </footer>
 
       </main>
+
+      {/* Legal & Impressum Modal */}
+      {showLegal && (
+         <div className="fixed inset-0 bg-black/80 z-[200] flex items-center justify-center p-4 backdrop-blur-sm pointer-events-auto" onClick={() => setShowLegal(false)}>
+            <div className="bg-[#fef3d7] border-4 border-[#8b4513] rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto text-[#2c1810] shadow-2xl relative" onClick={e => e.stopPropagation()}>
+                <button onClick={() => setShowLegal(false)} className="absolute top-4 right-5 text-[#8b4513] hover:text-[#3d1f0d] text-4xl" aria-label="Close modal">&times;</button>
+                <h2 className="font-cinzel text-3xl font-bold mb-6 text-[#3d1f0d] border-b border-[#8b4513]/20 pb-3 mt-2">Impressum & Legal</h2>
+                
+                <section className="mb-6 font-serif text-sm leading-relaxed text-justify space-y-1">
+                  <h3 className="font-cinzel font-bold text-[#8b4513] text-lg uppercase tracking-wider mb-2">Operator</h3>
+                  <p>Tamas Deak</p>
+                  <p>Wetzlarer Str 4</p>
+                  <p>63128 Dietzenbach, Germany</p>
+                  <p className="pt-2"><strong>Contact:</strong> Phone: +49 15202592239</p>
+                </section>
+
+                <section className="mb-8 font-serif text-sm leading-relaxed text-justify space-y-4 bg-[#fdf6e9] p-5 border border-[#d4c48a] rounded-lg shadow-inner">
+                  <h3 className="font-cinzel font-bold text-[#8b4513] text-lg uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                    Disclaimer
+                  </h3>
+                  <p>This application is provided 'as is' without any warranties. The creators are not liable for any direct or indirect consequences, damages, or losses resulting from the use of this app. Use of this service, including the provision of API keys, is entirely at the user's own risk.</p>
+                </section>
+
+                <section className="font-serif text-sm leading-relaxed text-justify space-y-4">
+                  <h3 className="font-cinzel font-bold text-[#8b4513] text-lg uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                    About the Team
+                  </h3>
+                  <p>Developed by Tamas Deak in collaboration with <strong>Alessandro</strong>, <strong>Ravi Gabbita</strong>, <strong>Om</strong>, and <strong>Kumarguru</strong>.</p>
+                  <p className="italic opacity-80 mt-2">This application was explicitly created as a collective effort for the Outskill AI Engineering Capstone Project. A special thanks to the Outskill team for the training!</p>
+                </section>
+            </div>
+         </div>
+      )}
     </div>
   );
 };

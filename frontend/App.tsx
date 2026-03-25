@@ -213,7 +213,6 @@ const App: React.FC = () => {
   const [pendingScene, setPendingScene] = useState<Scene | null>(null);
   const [showConfig, setShowConfig] = useState(false);
   const [showLanding, setShowLanding] = useState(false);
-  const [showLegal, setShowLegal] = useState(false);
   const [config, setConfig] = useState<StoryConfig>(DEFAULT_CONFIG);
   const [animPaused, setAnimPaused] = useState(false);
   // true only when every prefired job for the current scene is downloaded & cached
@@ -646,10 +645,9 @@ const App: React.FC = () => {
       )}
 
       {state.status === 'idle' && (
-        <>
-          <div className="relative z-10 flex flex-col items-center animate-fadeIn px-6 w-full max-w-lg" style={{ marginTop: '2vh' }}>
+        <div className="relative z-10 flex flex-col items-center animate-fadeIn px-6 w-full max-w-lg" style={{ marginTop: '2vh' }}>
 
-            {/* Animated tagline — stagger-letter fade above title */}
+          {/* Animated tagline — stagger-letter fade above title */}
           <div aria-label="Every night, a new adventure" style={{
             position: 'relative', zIndex: 1,
             fontFamily: "'Cinzel', serif",
@@ -693,13 +691,6 @@ const App: React.FC = () => {
             </button>
           </form>
         </div>
-
-        {/* New Footer added to idle screen */}
-        <div className="fixed bottom-0 left-0 w-full p-4 flex flex-col sm:flex-row justify-between items-center text-[10px] text-white opacity-50 hover:opacity-100 transition-opacity z-[100] font-cinzel pointer-events-auto bg-gradient-to-t from-black/80 to-transparent">
-           <div className="mb-2 sm:mb-0 uppercase tracking-widest whitespace-nowrap overflow-hidden text-ellipsis">Created as a Capstone Project for Outskill</div>
-           <button onClick={() => setShowLegal(true)} className="hover:underline tracking-widest uppercase flex-shrink-0">Impressum & Legal</button>
-        </div>
-      </>
       )}
 
       {showLanding && (
@@ -782,42 +773,6 @@ const App: React.FC = () => {
           </button>
         </div>
       )}
-
-      {/* Legal & Impressum Modal */}
-      {showLegal && (
-         <div className="fixed inset-0 bg-black/80 z-[200] flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setShowLegal(false)}>
-            <div className="bg-[#fef3d7] border-4 border-[#8b4513] rounded-2xl p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto text-[#2c1810] shadow-2xl relative" onClick={e => e.stopPropagation()}>
-                <button onClick={() => setShowLegal(false)} className="absolute top-4 right-5 text-[#8b4513] hover:text-[#3d1f0d] text-4xl" aria-label="Close modal">&times;</button>
-                <h2 className="font-cinzel text-3xl font-bold mb-6 text-[#3d1f0d] border-b border-[#8b4513]/20 pb-3 mt-2">Impressum & Legal</h2>
-                
-                <section className="mb-6 font-serif text-sm leading-relaxed text-justify space-y-1">
-                  <h3 className="font-cinzel font-bold text-[#8b4513] text-lg uppercase tracking-wider mb-2">Operator</h3>
-                  <p>Tamas Deak</p>
-                  <p>Wetzlarer Str 4</p>
-                  <p>63128 Dietzenbach, Germany</p>
-                  <p className="pt-2"><strong>Contact:</strong> Phone: +49 15202592239</p>
-                </section>
-
-                <section className="mb-8 font-serif text-sm leading-relaxed text-justify space-y-4 bg-[#fdf6e9] p-5 border border-[#d4c48a] rounded-lg shadow-inner">
-                  <h3 className="font-cinzel font-bold text-[#8b4513] text-lg uppercase tracking-wider mb-2 flex items-center gap-2">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
-                    Disclaimer
-                  </h3>
-                  <p>This application is provided 'as is' without any warranties. The creators are not liable for any direct or indirect consequences, damages, or losses resulting from the use of this app. Use of this service, including the provision of API keys, is entirely at the user's own risk.</p>
-                </section>
-
-                <section className="font-serif text-sm leading-relaxed text-justify space-y-4">
-                  <h3 className="font-cinzel font-bold text-[#8b4513] text-lg uppercase tracking-wider mb-2 flex items-center gap-2">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
-                    About the Team
-                  </h3>
-                  <p>Developed by Tamas Deak in collaboration with <strong>Alessandro</strong>, <strong>Ravi Gabbita</strong>, <strong>Om</strong>, and <strong>Kumarguru</strong>.</p>
-                  <p className="italic opacity-80 mt-2">This application was explicitly created as a collective effort for the Outskill AI Engineering Capstone Project.</p>
-                </section>
-            </div>
-         </div>
-      )}
-
     </div>
   );
 };
