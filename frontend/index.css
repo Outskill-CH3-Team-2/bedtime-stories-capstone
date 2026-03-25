@@ -1,1 +1,32 @@
 @import "tailwindcss";
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+@keyframes wiggle {
+  0%, 100% { transform: rotate(-3deg); }
+  50% { transform: rotate(3deg); }
+}
+@keyframes float-random {
+  0%, 100% { transform: translate(0, 0) rotate(0); }
+  33% { transform: translate(15px, -15px) rotate(5deg); }
+  66% { transform: translate(-10px, 15px) rotate(-5deg); }
+}
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+.animate-float-delayed {
+  animation: float 5s ease-in-out 1.5s infinite;
+}
+.animate-float-slow {
+  animation: float 6s ease-in-out 0.5s infinite;
+}
+.animate-wiggle { animation: wiggle 4s ease-in-out infinite; }
+.animate-float-random { animation: float-random 10s ease-in-out infinite; }
+.animate-spin-slow { animation: spin-slow 20s linear infinite; }
+.animate-spin-superslow { animation: spin-slow 40s linear infinite; }
